@@ -1,8 +1,8 @@
 {
-  "name": "@saraswati/server",
+  "name": "@oswal/server",
   "version": "0.1.0",
   "private": true,
-  "description": "Saraswati ERP backend (Express + Prisma + Postgres)",
+  "description": "Oswal Handicrafts ERP backend (Express + Prisma + Postgres)",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

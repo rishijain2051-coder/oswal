@@ -8,7 +8,7 @@ import { apiError } from '../api/client';
 const { Title, Text, Paragraph } = Typography;
 
 /** Empty in a production build, so nothing ships pre-filled. */
-const DEV_LOGIN = import.meta.env.DEV ? { email: 'admin@saraswati.local', password: 'admin123' } : undefined;
+const DEV_LOGIN = import.meta.env.DEV ? { email: 'admin@oswal.local', password: 'admin123' } : undefined;
 
 export default function LoginPage() {
   const { user, login } = useAuth();
@@ -45,7 +45,7 @@ export default function LoginPage() {
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 40 }}>🪵</div>
           <Title level={3} style={{ marginBottom: 0 }}>
-            Saraswati Export
+            Oswal Handicrafts
           </Title>
           <Text type="secondary">Enterprise Resource Planning</Text>
         </div>
@@ -56,7 +56,7 @@ export default function LoginPage() {
             left hanging open. `import.meta.env.DEV` is compiled away in the build. */}
         <Form layout="vertical" onFinish={onFinish} initialValues={DEV_LOGIN}>
           <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
-            <Input prefix={<MailOutlined />} placeholder="you@saraswati.local" size="large" autoComplete="username" autoFocus />
+            <Input prefix={<MailOutlined />} placeholder="you@oswal.local" size="large" autoComplete="username" autoFocus />
           </Form.Item>
           <Form.Item name="password" label="Password" rules={[{ required: true }]}>
             <Input.Password prefix={<LockOutlined />} placeholder="••••••••" size="large" autoComplete="current-password" />
@@ -67,7 +67,7 @@ export default function LoginPage() {
         </Form>
         {import.meta.env.DEV && (
           <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 16, marginBottom: 0, textAlign: 'center' }}>
-            Demo: admin@saraswati.local / admin123
+            Demo: admin@oswal.local / admin123
           </Paragraph>
         )}
       </Card>

@@ -1,4 +1,4 @@
-// Saraswati Export ERP — Prisma schema
+// Oswal Handicrafts ERP — Prisma schema
 //
 // Provider is Postgres. In development it is a cluster that lives inside the repo
 // (`server/.pgdata`, managed by `scripts/pg.ts` — see `npm run pg:start`); in production
@@ -927,7 +927,7 @@ model DocSequence {
 model Company {
   id Int @id @default(1)
 
-  legalName String  @default("Saraswati Export")
+  legalName String  @default("Oswal Handicrafts")
   tradeName String?
   addressL1 String?
   addressL2 String?

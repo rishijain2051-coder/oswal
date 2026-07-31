@@ -222,7 +222,7 @@ export default function AppLayout() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ fontSize: 22 }}>🪵</div>
           <span className="brand-title" style={{ fontSize: 18 }}>
-            Saraswati Export <span style={{ opacity: 0.7, fontWeight: 400 }}>· ERP</span>
+            Oswal Handicrafts <span style={{ opacity: 0.7, fontWeight: 400 }}>· ERP</span>
           </span>
         </div>
         <Dropdown

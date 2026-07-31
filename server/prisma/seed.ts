@@ -8,19 +8,19 @@ import { ensureCompany } from '../src/lib/company';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Seeding Saraswati ERP...');
+  console.log('Seeding Oswal Handicrafts ERP...');
 
   // --- Users ---------------------------------------------------------------
   const passwordHash = await bcrypt.hash('admin123', 10);
   const admin = await prisma.user.upsert({
-    where: { email: 'admin@saraswati.local' },
+    where: { email: 'admin@oswal.local' },
     update: {},
-    create: { name: 'Administrator', email: 'admin@saraswati.local', role: 'Admin', passwordHash },
+    create: { name: 'Administrator', email: 'admin@oswal.local', role: 'Admin', passwordHash },
   });
   await prisma.user.upsert({
-    where: { email: 'manager@saraswati.local' },
+    where: { email: 'manager@oswal.local' },
     update: {},
-    create: { name: 'Production Manager', email: 'manager@saraswati.local', role: 'Manager', passwordHash: await bcrypt.hash('manager123', 10) },
+    create: { name: 'Production Manager', email: 'manager@oswal.local', role: 'Manager', passwordHash: await bcrypt.hash('manager123', 10) },
   });
 
   // --- Currencies ----------------------------------------------------------
@@ -330,7 +330,7 @@ async function main() {
   await prisma.company.update({
     where: { id: 1 },
     data: {
-      legalName: 'Saraswati Export',
+      legalName: 'Oswal Handicrafts',
       tradeName: 'Furniture & Hardware Exporter',
       addressL1: 'Plot 44, Boranada Industrial Area',
       city: 'Jodhpur',
@@ -341,7 +341,7 @@ async function main() {
       panNo: 'ABCDE1234F',
       iecNo: '0812345678',
       phone: '+91 291 2740 155',
-      email: 'exports@saraswatiexport.in',
+      email: 'exports@oswalhandicrafts.in',
     },
   });
 
@@ -356,8 +356,8 @@ async function main() {
   }
 
   console.log('Seed complete.');
-  console.log('  Admin login : admin@saraswati.local / admin123');
-  console.log('  Manager login: manager@saraswati.local / manager123');
+  console.log('  Admin login : admin@oswal.local / admin123');
+  console.log('  Manager login: manager@oswal.local / manager123');
 }
 
 main()

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export const TOKEN_KEY = 'saraswati_erp_token';
+export const TOKEN_KEY = 'oswal_erp_token';
 
 // `withCredentials` lets the httpOnly session cookie ride along; it is what allows
 // <img src="/uploads/…"> to load files that are no longer served publicly.

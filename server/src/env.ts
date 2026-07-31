@@ -7,7 +7,7 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const isProd = NODE_ENV === 'production';
 
 /** Secrets shipped in source are not secrets. Refuse to run on a known one. */
-const WEAK_SECRETS = new Set(['saraswati-dev-secret', 'saraswati-dev-secret-change-in-production', 'secret', 'changeme']);
+const WEAK_SECRETS = new Set(['oswal-dev-secret', 'oswal-dev-secret-change-in-production', 'secret', 'changeme']);
 
 function resolveJwtSecret(): string {
   const supplied = process.env.JWT_SECRET?.trim();
@@ -35,16 +35,16 @@ function resolveJwtSecret(): string {
 /**
  * Browser origins allowed to call the API. In development the Vite dev server
  * proxies `/api`, so requests are same-origin and this only matters if the app is
- * opened directly against :4000.
+ * opened directly against :689.
  */
 function resolveOrigins(): string[] {
   const configured = process.env.CORS_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean);
   if (configured?.length) return configured;
-  return isProd ? [] : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  return isProd ? [] : ['http://localhost:688', 'http://127.0.0.1:688'];
 }
 
 export const env = {
-  PORT: parseInt(process.env.PORT || '4000', 10),
+  PORT: parseInt(process.env.PORT || '689', 10),
   JWT_SECRET: resolveJwtSecret(),
   NODE_ENV,
   isProd,

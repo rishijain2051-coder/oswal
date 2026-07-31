@@ -55,8 +55,8 @@ export interface MailDraft {
 /** Build an .eml message: multipart/mixed > (multipart/alternative, attachments). */
 export function buildEml(m: MailDraft): string {
   const stamp = Date.now().toString(36);
-  const outer = `----=_saraswati_mixed_${stamp}`;
-  const inner = `----=_saraswati_alt_${stamp}`;
+  const outer = `----=_oswal_mixed_${stamp}`;
+  const inner = `----=_oswal_alt_${stamp}`;
   const atts = m.attachments ?? [];
 
   const head: string[] = [];

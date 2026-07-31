@@ -46,7 +46,7 @@ app.use(
 app.use(express.json({ limit: '8mb' }));
 app.use(cookieParser());
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'saraswati-erp' }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'oswal-erp' }));
 
 /**
  * Uploaded product photos and hand-over proof shots are business data, so they are
@@ -88,5 +88,5 @@ app.use('/api', authenticate, salesRoutes);
 app.use(errorHandler);
 
 app.listen(env.PORT, () => {
-  console.log(`\n  Saraswati ERP API running at http://localhost:${env.PORT}\n`);
+  console.log(`\n  Oswal Handicrafts ERP API running at http://localhost:${env.PORT}\n`);
 });

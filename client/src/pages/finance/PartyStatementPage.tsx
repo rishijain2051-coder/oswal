@@ -475,7 +475,7 @@ export default function PartyStatementPage() {
         <div className="doc-sheet">
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: '#4e342e' }}>Saraswati Export</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: '#4e342e' }}>Oswal Handicrafts</div>
               <div style={{ color: '#777', fontSize: 12 }}>Statement of account</div>
             </div>
             <div style={{ textAlign: 'right' }}>

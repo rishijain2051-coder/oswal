@@ -82,7 +82,7 @@ export function connection(): Conn {
 
   const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
   const user = decodeURIComponent(url.username);
-  if (!database) die('DATABASE_URL has no database name (…:5433/saraswati).');
+  if (!database) die('DATABASE_URL has no database name (…:687/oswal).');
   if (!user) die('DATABASE_URL has no user (…//postgres:password@…).');
 
   return {
@@ -154,7 +154,7 @@ type Run = { code: number; stdout: string; stderr: string };
  * Do not "simplify" this back to `encoding: 'utf8'`.
  */
 function run(file: string, args: string[], env?: Record<string, string>): Run {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saraswati-pg-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oswal-pg-'));
   const outPath = path.join(dir, 'stdout');
   const errPath = path.join(dir, 'stderr');
   const out = fs.openSync(outPath, 'w');
@@ -248,7 +248,7 @@ async function init(conn: Conn): Promise<void> {
 
   // initdb will not take a password on the command line (it would sit in the process
   // list), so it goes through a file that is removed either way.
-  const pwfile = path.join(os.tmpdir(), `saraswati-initdb-${process.pid}`);
+  const pwfile = path.join(os.tmpdir(), `oswal-initdb-${process.pid}`);
   fs.writeFileSync(pwfile, conn.password, { mode: 0o600 });
   try {
     const res = run(exe('initdb'), [

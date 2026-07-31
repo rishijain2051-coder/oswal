@@ -1,7 +1,7 @@
 /**
  * The workforce engine: what every worker has earned, and what is therefore owed.
  *
- * THERE ARE NO PAY PERIODS. Saraswati pays people when it pays them — a worker may
+ * THERE ARE NO PAY PERIODS. Oswal Handicrafts pays people when it pays them — a worker may
  * draw an advance, or go two months without a payment. So a worker is a running
  * ACCOUNT, exactly like a jobwork vendor: earnings accrue as dated events and
  * payments are ad-hoc for any amount on any date. Nothing is ever run or closed, so

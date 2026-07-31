@@ -89,7 +89,7 @@ export default function UsersPage() {
           </Form.Item>
           {!editing && (
             <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
-              <Input placeholder="person@saraswati.local" />
+              <Input placeholder="person@oswal.local" />
             </Form.Item>
           )}
           <Form.Item name="password" label={editing ? 'New password (leave blank to keep)' : 'Password'} rules={editing ? [{ min: 6 }] : [{ required: true, min: 6 }]}>

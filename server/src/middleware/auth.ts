@@ -22,7 +22,7 @@ export const ROLE_RANK: Record<string, number> = {
 };
 
 /** Name of the httpOnly cookie that lets `<img>` requests reach /uploads. */
-export const SESSION_COOKIE = 'saraswati_session';
+export const SESSION_COOKIE = 'oswal_session';
 
 /** Require a valid bearer token; attaches req.user. */
 export function authenticate(req: Request, _res: Response, next: NextFunction) {

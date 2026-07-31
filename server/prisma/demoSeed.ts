@@ -555,8 +555,8 @@ async function ensureConfig() {
   // with an empty update — a drifted role or password would otherwise leave the demo
   // unopenable at exactly the wrong moment.
   const logins = [
-    { email: 'admin@saraswati.local', name: 'Administrator', role: 'Admin', password: 'admin123' },
-    { email: 'manager@saraswati.local', name: 'Production Manager', role: 'Manager', password: 'manager123' },
+    { email: 'admin@oswal.local', name: 'Administrator', role: 'Admin', password: 'admin123' },
+    { email: 'manager@oswal.local', name: 'Production Manager', role: 'Manager', password: 'manager123' },
   ];
   let admin!: { id: number };
   for (const l of logins) {
@@ -585,7 +585,7 @@ async function ensureConfig() {
   await prisma.company.update({
     where: { id: 1 },
     data: {
-      legalName: 'Saraswati Export',
+      legalName: 'Oswal Handicrafts',
       tradeName: 'Furniture & Hardware Exporter',
       addressL1: 'Plot 44, Boranada Industrial Area',
       city: 'Jodhpur',
@@ -596,7 +596,7 @@ async function ensureConfig() {
       panNo: 'ABCDE1234F',
       iecNo: '0812345678',
       phone: '+91 291 2740 155',
-      email: 'exports@saraswatiexport.in',
+      email: 'exports@oswalhandicrafts.in',
       bankDetails: 'Bank: State Bank of India, Sardarpura, Jodhpur\nA/C: 3812 4457 9910\nIFSC: SBIN0031234\nSWIFT: SBININBB245',
     },
   });
@@ -1278,7 +1278,7 @@ async function main() {
   ] as [string, number, string][]) {
     console.log(`  ${n}  ${c} ${v.toLocaleString('en-IN')}`);
   }
-  console.log('\nDemo ready.  admin@saraswati.local / admin123');
+  console.log('\nDemo ready.  admin@oswal.local / admin123');
 }
 
 /**

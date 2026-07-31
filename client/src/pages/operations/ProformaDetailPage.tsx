@@ -236,7 +236,7 @@ export default function ProformaDetailPage() {
               {company?.logoFilename && <img src={`/uploads/${company.logoFilename}`} alt="" style={{ width: 54, height: 54, objectFit: 'contain' }} />}
               <div>
                 {/* From the Company record, so this page and the PDF cannot disagree. */}
-                <div style={{ fontSize: 22, fontWeight: 700, color: '#4e342e' }}>{company?.legalName ?? 'Saraswati Export'}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#4e342e' }}>{company?.legalName ?? 'Oswal Handicrafts'}</div>
                 <div style={{ color: '#777', fontSize: 12 }}>
                   {[company?.tradeName, [company?.city, company?.state].filter(Boolean).join(', '), company?.country].filter(Boolean).join(' · ')}
                 </div>
@@ -352,7 +352,7 @@ export default function ProformaDetailPage() {
             )}
           </div>
           <div style={{ marginTop: 28, textAlign: 'right', fontSize: 12 }}>
-            <div style={{ marginTop: 30 }}>For Saraswati Export</div>
+            <div style={{ marginTop: 30 }}>For Oswal Handicrafts</div>
             <div style={{ color: '#777' }}>Authorised Signatory</div>
           </div>
         </div>

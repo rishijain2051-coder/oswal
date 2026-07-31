@@ -20,7 +20,7 @@ type Tx = Prisma.TransactionClient | PrismaClient;
 
 /** Seed defaults. Only ever used to CREATE the record, never to override it. */
 export const companyDefaults = {
-  legalName: process.env.COMPANY_NAME || 'Saraswati Export',
+  legalName: process.env.COMPANY_NAME || 'Oswal Handicrafts',
   tradeName: process.env.COMPANY_TAGLINE || 'Furniture & Hardware Exporter',
   addressL1: process.env.COMPANY_ADDRESS || 'Jodhpur, Rajasthan, India',
   city: process.env.COMPANY_CITY || 'Jodhpur',

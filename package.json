@@ -1,8 +1,8 @@
 {
-  "name": "saraswati-erp",
+  "name": "oswal-erp",
   "version": "0.1.0",
   "private": true,
-  "description": "ERP for Saraswati Export — Product Management + Operations",
+  "description": "ERP for Oswal Handicrafts — Product Management + Operations",
   "workspaces": [
     "server",
     "client"

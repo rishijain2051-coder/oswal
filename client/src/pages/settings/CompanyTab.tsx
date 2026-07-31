@@ -81,7 +81,7 @@ export default function CompanyTab() {
         <Row gutter={12}>
           <Col span={12}>
             <Form.Item name="legalName" label="Legal name" rules={[{ required: true, message: 'What is the registered name?' }]}>
-              <Input placeholder="Saraswati Export" />
+              <Input placeholder="Oswal Handicrafts" />
             </Form.Item>
           </Col>
           <Col span={12}>
@@ -171,7 +171,7 @@ export default function CompanyTab() {
           </Col>
           <Col span={8}>
             <Form.Item name="email" label="E-mail" rules={[{ type: 'email', message: 'That does not look like an e-mail address.' }]}>
-              <Input placeholder="exports@saraswatiexport.in" />
+              <Input placeholder="exports@oswalhandicrafts.in" />
             </Form.Item>
           </Col>
           <Col span={8}>

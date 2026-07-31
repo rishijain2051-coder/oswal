@@ -1,6 +1,6 @@
-# Saraswati Export — ERP
+# Oswal Handicrafts — ERP
 
-A modular ERP for **Saraswati Export**, a furniture and hardware exporter in Jodhpur.
+A modular ERP for **Oswal Handicrafts**, a furniture and hardware exporter in Jodhpur.
 
 Three modules are live:
 
@@ -31,10 +31,10 @@ the workforce is owed joins the same payables view as vendors and suppliers.
 ```bash
 npm install          # installs both workspaces, including the Postgres binaries
 npm run db:setup     # start Postgres, create the database + seed masters
-npm run dev          # API on :4000, app on :5173
+npm run dev          # API on :689, app on :688
 ```
 
-Open **http://localhost:5173**.
+Open **http://localhost:688**.
 
 There is **nothing to install for the database**. Postgres itself arrives as an npm
 package and its data lives in `server/.pgdata`, inside the project folder — `npm run dev`
@@ -53,8 +53,8 @@ npm run db:demo      # replaces operational data with a worked example
 
 | Role | Email | Password |
 |---|---|---|
-| Admin | admin@saraswati.local | admin123 |
-| Manager | manager@saraswati.local | manager123 |
+| Admin | admin@oswal.local | admin123 |
+| Manager | manager@oswal.local | manager123 |
 
 ## Product Management
 

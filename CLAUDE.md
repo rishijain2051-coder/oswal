@@ -1,10 +1,10 @@
-# CLAUDE.md — Saraswati Export ERP
+# CLAUDE.md — Oswal Handicrafts ERP
 
 Guidance for working in this repo.
 
 ## What this is
 
-Modular ERP for Saraswati Export (furniture/hardware exporter). **Phase 1 =
+Modular ERP for Oswal Handicrafts (furniture/hardware exporter). **Phase 1 =
 Product Management**, **Phase 2 = Operations** (proformas → orders → production
 board), **Phase 3 = Manforce** (workers → muster → wages → statutory), **Phase 4 =
 Finished Product & Sales** (finished stock → packing → container → shipment →
@@ -64,7 +64,7 @@ into it from elsewhere. Adding a sub-section means adding its URL segment to
 - **server**: Express + TypeScript, Prisma → **Postgres** (`server/prisma/schema.prisma`).
   Run with `tsx` in dev. See *The database* below — it lives inside the repo.
 - **client**: React + Vite + TypeScript + Ant Design. Data via `@tanstack/react-query`
-  + axios (`client/src/api/`). Vite proxies `/api` and `/uploads` to `:4000`.
+  + axios (`client/src/api/`). Vite proxies `/api` and `/uploads` to `:689`.
 - **Auth**: JWT bearer token in `localStorage`, roles Admin > Manager > Operator > Viewer
   (`server/src/middleware/auth.ts`, `client/src/auth/AuthContext.tsx`).
 
@@ -661,7 +661,7 @@ Undoing any of these reopens a hole that was closed deliberately:
   a random one in dev. Never reintroduce a hardcoded fallback.
 - CORS is an allowlist from `CORS_ORIGINS`; `cors()` with no options is wide open.
 - `/uploads` sits behind `authenticateUpload`, which accepts the bearer header **or**
-  the httpOnly `saraswati_session` cookie that login sets — an `<img>` tag cannot send
+  the httpOnly `oswal_session` cookie that login sets — an `<img>` tag cannot send
   a header. The client's axios instance uses `withCredentials`. Files go out with
   `nosniff` + CSP.
 - All image uploads go through `lib/imageUpload.ts`: extension allow-list, then the
@@ -717,7 +717,7 @@ Undoing any of these reopens a hole that was closed deliberately:
 ```bash
 npm install
 npm run db:setup     # start Postgres + prisma db push + seed
-npm run dev          # starts Postgres, then server :4000 + client :5173
+npm run dev          # starts Postgres, then server :689 + client :688
 npm run build        # type-check + build both (run before declaring done)
 ```
 
