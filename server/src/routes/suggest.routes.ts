@@ -9,13 +9,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
-import { asyncHandler } from '../lib/http';
+import { asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { round } from '../lib/costing';
 import { assemble, normalizeKey, outlier, summarize, windowStart, type Occurrence, type SourceStats, type Suggestion } from '../lib/suggest';
 import { CHANGE_ROOTS } from '../lib/changeLog';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 
 /** The window and tolerance the Admin has set. Created on first use. */

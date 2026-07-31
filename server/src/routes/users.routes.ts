@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole, ROLES } from '../middleware/auth';
 import { hashPassword } from '../lib/auth';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate, requireRole('Admin'));
 
 const select = { id: true, name: true, email: true, role: true, isActive: true, createdAt: true } as const;

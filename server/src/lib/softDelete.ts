@@ -45,7 +45,14 @@ export function live<T extends object>(where?: T): T & { deletedAt: null } {
   return { ...(where ?? ({} as T)), deletedAt: null };
 }
 
-/** Hide a record. Idempotent: deleting twice keeps the first timestamp. */
+/**
+ * Hide a record. Idempotent: deleting twice keeps the first timestamp.
+ *
+ * A row that does not exist is a 404, not a success. It used to return the timestamp
+ * regardless, so `DELETE /orders/99999` answered 200 as though something had been trashed —
+ * the routes each check existence first, so nothing was actually broken, but the function
+ * promised more than it delivered and the next caller would have believed it.
+ */
 export async function softDelete(model: SoftModel, id: number, tx: Tx = prisma): Promise<Date> {
   const at = new Date();
   // updateMany so a row already deleted is a no-op rather than an error, and so the
@@ -54,6 +61,7 @@ export async function softDelete(model: SoftModel, id: number, tx: Tx = prisma):
   if (done.count === 0) {
     const existing = await (tx as any)[model].findUnique({ where: { id }, select: { deletedAt: true } });
     if (existing?.deletedAt) return existing.deletedAt as Date;
+    if (!existing) throw new ApiError(404, 'That record no longer exists.');
   }
   return at;
 }

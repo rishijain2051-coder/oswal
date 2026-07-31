@@ -21,7 +21,7 @@ import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole, ROLE_RANK } from '../middleware/auth';
 import { imageUploader, keepRealImages, uploadDir } from '../lib/imageUpload';
 import { nextDocNumber } from '../lib/numbering';
@@ -45,6 +45,8 @@ import {
 } from '../lib/workforce';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 const canEdit = requireRole('Operator');
 const canManage = requireRole('Manager');

@@ -18,7 +18,7 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { nextDocNumber } from '../lib/numbering';
 import { round } from '../lib/costing';
@@ -61,6 +61,8 @@ import {
 } from '../lib/salesBoard';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 /** Operator packs — it is shop-floor work. */
 const canPack = requireRole('Operator');

@@ -3,7 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import { env } from './env';
-import { errorHandler } from './lib/http';
+import { ApiError, errorHandler } from './lib/http';
 import { authenticate, authenticateUpload } from './middleware/auth';
 import authRoutes from './routes/auth.routes';
 import metaRoutes from './routes/meta.routes';
@@ -19,18 +19,31 @@ import salesRoutes from './routes/sales.routes';
 
 const app = express();
 
-// Only the app's own origins may call the API. Wide-open CORS would let any site a
-// logged-in user visits drive the ERP with their credentials.
+/**
+ * Only the app's own origins may call the API. Wide-open CORS would let any site a
+ * logged-in user visits drive the ERP with their credentials.
+ *
+ * A disallowed origin is REFUSED with an error rather than answered with `cb(null, false)`.
+ * The difference matters: `false` only tells `cors` to omit the `Access-Control-Allow-Origin`
+ * header, so the browser discards the *response* — but the handler has already run, and a
+ * request that qualifies as "simple" under CORS is never preflighted, so a state-changing
+ * POST from an unknown origin would have executed before anything was blocked. Throwing
+ * makes the refusal happen before any route.
+ */
 app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true); // same-origin, curl, server-to-server
-      cb(null, env.CORS_ORIGINS.includes(origin));
+      if (env.CORS_ORIGINS.includes(origin)) return cb(null, true);
+      cb(new ApiError(403, `Origin ${origin} is not allowed to call this API.`));
     },
     credentials: true,
   })
 );
-app.use(express.json({ limit: '4mb' }));
+// 8 MB rather than 4: a cost sheet with forty lines, a bulk currency import or an order
+// edit carrying every line's charges is a big JSON body, and the failure mode was a bare
+// "Payload Too Large" with nothing telling anybody which request was too big.
+app.use(express.json({ limit: '8mb' }));
 app.use(cookieParser());
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'saraswati-erp' }));

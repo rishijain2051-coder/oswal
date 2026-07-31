@@ -39,14 +39,27 @@
  * it locks nothing that matters — the stale read has already happened.
  */
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { ApiError } from './http';
 
 type Tx = Prisma.TransactionClient | PrismaClient;
 
 /**
  * Take the order's write lock. Returns false when there is no such order, so the caller
  * can raise its own 404 with wording that fits the route.
+ *
+ * **Only a LIVE order can be locked.** The lock is an `UPDATE` of `updatedAt`, so locking a
+ * trashed order would quietly modify a row that is supposed to be inert — and every caller
+ * is about to write to a board that no longer counts towards anything. A trashed order is
+ * refused here rather than by each route in turn, so the one message is stated once: the
+ * routes used to check `deletedAt` for themselves *after* locking, and only one of them did.
  */
 export async function lockOrder(tx: Tx, orderId: number): Promise<boolean> {
-  const locked = await tx.order.updateMany({ where: { id: orderId }, data: { updatedAt: new Date() } });
-  return locked.count > 0;
+  const locked = await tx.order.updateMany({ where: { id: orderId, deletedAt: null }, data: { updatedAt: new Date() } });
+  if (locked.count > 0) return true;
+
+  // Nothing was locked: either the order does not exist — the caller's 404 — or it is in the
+  // trash, which is a different answer and worth saying, because it is recoverable.
+  const trashed = await tx.order.findUnique({ where: { id: orderId }, select: { number: true, deletedAt: true } });
+  if (trashed?.deletedAt) throw new ApiError(409, `${trashed.number} is in the trash. Restore it before changing it.`);
+  return false;
 }

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { nextDocNumber } from '../lib/numbering';
 import { computeCostSheet } from '../lib/productCosting';
@@ -25,6 +25,8 @@ import { validateMoveWorkers } from '../lib/workforce';
 import { diffFields, logChanges } from '../lib/changeLog';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 const canEdit = requireRole('Operator');
 const canManage = requireRole('Manager');
@@ -187,15 +189,27 @@ router.get(
 );
 
 /** A document-level extra cost or discount. Shared by proformas and orders. */
-const chargeSchema = z.object({
-  name: z.string().min(1),
-  kind: z.enum(CHARGE_KINDS).default('CHARGE'),
-  amount: z.number().min(0).default(0),
-  pct: z.number().min(0).max(100).default(0),
-  gstRatePct: z.number().min(0).max(100).default(0),
-  isTaxable: z.boolean().default(true),
-  note: z.string().nullable().optional(),
-});
+/**
+ * A document-level charge or discount. Amounts are stored positive; `kind` carries the sign.
+ *
+ * Both figures at zero is refused rather than saved. It is worth nothing by definition, and
+ * `documentTotalsOf` still produces a row for it — so it printed as a ₹0.00 line on the
+ * proforma and the invoice, which is the sort of thing a buyer asks about.
+ */
+const chargeSchema = z
+  .object({
+    name: z.string().min(1),
+    kind: z.enum(CHARGE_KINDS).default('CHARGE'),
+    amount: z.number().min(0).default(0),
+    pct: z.number().min(0).max(100).default(0),
+    gstRatePct: z.number().min(0).max(100).default(0),
+    isTaxable: z.boolean().default(true),
+    note: z.string().nullable().optional(),
+  })
+  .refine((c) => c.amount > 0 || c.pct > 0, {
+    message: 'Give the charge an amount or a percentage — a zero charge would print as a ₹0.00 line.',
+    path: ['amount'],
+  });
 
 /** Tax and discount fields a product line may carry. Ignored on an export. */
 const lineTaxFields = {
@@ -1027,7 +1041,9 @@ router.post(
       const orderRow = await tx.order.findUnique({ where: { id: orderId }, select: { status: true, number: true, deletedAt: true } });
       if (!orderRow) throw new ApiError(404, 'Order not found.');
       if (orderRow.status === 'Cancelled') throw new ApiError(409, 'This order is cancelled — reopen it before moving pieces.');
-      // Pieces cannot move on an order that has left every list and every total.
+      // Pieces cannot move on an order that has left every list and every total. `lockOrder`
+      // is the primary gate for this now and refuses a trashed order before we get here;
+      // this stays as the in-transaction re-check, so removing the lock cannot reopen it.
       if (orderRow.deletedAt) throw new ApiError(409, `${orderRow.number} is in the trash. Restore it before moving pieces.`);
       const lines = await tx.orderLine.findMany({
         where: { orderId },

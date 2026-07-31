@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { nextDocNumber } from '../lib/numbering';
 import { computeCostSheet } from '../lib/productCosting';
@@ -29,6 +29,8 @@ import { sheetPdf } from '../lib/docPdf';
 import { assertLive, notDeleted, restore, softDelete } from '../lib/softDelete';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 const canEdit = requireRole('Operator');
 const canManage = requireRole('Manager');

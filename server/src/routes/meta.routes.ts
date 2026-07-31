@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { COST_HEADS, HEAD_META } from '../lib/costing';
 import { ROLES } from '../middleware/auth';
 import { prisma } from '../db';
-import { asyncHandler } from '../lib/http';
+import { asyncHandler, guardIdParams } from '../lib/http';
 import { methodToApi, rowToMethodDef } from '../lib/methods';
 
 export const ATTRIBUTE_TYPES = [
@@ -24,6 +24,8 @@ export const RELATION_TYPES = [
 export const PRODUCT_STATUSES = ['Draft', 'Active', 'Discontinued'];
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 
 // Reference data the frontend needs to render forms and filters consistently.
 router.get(

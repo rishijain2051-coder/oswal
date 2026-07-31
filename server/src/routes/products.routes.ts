@@ -3,7 +3,7 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { computeCostSheet } from '../lib/productCosting';
 import { loadMethodMap } from '../lib/methods';
@@ -15,6 +15,8 @@ import { like } from '../lib/search';
 import { trashedNote } from '../lib/references';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 
 const canEdit = requireRole('Operator');

@@ -3,11 +3,13 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { env } from '../env';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { hashPassword, signToken, verifyPassword } from '../lib/auth';
 import { authenticate, SESSION_COOKIE } from '../middleware/auth';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 
 const loginSchema = z.object({
   email: z.string().email(),

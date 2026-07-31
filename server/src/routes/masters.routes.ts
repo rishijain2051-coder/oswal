@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
-import { ApiError, asyncHandler } from '../lib/http';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { ALLOWED_VARS } from '../lib/costing';
 import { validateExpr } from '../lib/expr';
@@ -14,6 +14,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const router = Router();
+// A route param here is always a database id — see guardIdParams.
+guardIdParams(router);
 router.use(authenticate);
 
 // Managers+ may edit master data; everyone may read.
