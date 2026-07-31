@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { App, Layout, Menu, Avatar, Dropdown, Typography, Tag, Modal, Form, Input } from 'antd';
+import { App, Layout, Menu, Avatar, Dropdown, Typography, Tag, Modal, Form, Input, Space } from 'antd';
 import {
   BoxPlotOutlined,
   ContainerOutlined,
@@ -43,6 +43,7 @@ const SECTION_KEYS: Record<string, string[]> = {
   sales: ['stock', 'packing', 'shipments'],
   finance: ['payments', 'invoices'],
   manforce: ['workers', 'muster', 'wages', 'statutory'],
+  settings: ['masters', 'users', 'roles'],
 };
 
 /**
@@ -58,7 +59,7 @@ function groupFor(pathname: string): string | null {
 }
 
 export default function AppLayout() {
-  const { user, logout, hasRole, changePassword } = useAuth();
+  const { user, logout, can, canAny, changePassword } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const { message } = App.useApp();
@@ -143,8 +144,7 @@ export default function AppLayout() {
         { key: '/sales', icon: <DashboardOutlined />, label: <Link to="/sales">Dashboard</Link> },
         { key: '/sales/stock', icon: <InboxOutlined />, label: <Link to="/sales/stock">Finished Stock</Link> },
         { key: '/sales/packing', icon: <BoxPlotOutlined />, label: <Link to="/sales/packing">Packing</Link> },
-        // Dispatch is Manager+; an Operator records packing and nothing else.
-        ...(hasRole('Manager') ? [{ key: '/sales/shipments', icon: <ContainerOutlined />, label: <Link to="/sales/shipments">Shipments</Link> }] : []),
+        ...(can('shipments.view') ? [{ key: '/sales/shipments', icon: <ContainerOutlined />, label: <Link to="/sales/shipments">Shipments</Link> }] : []),
       ],
     },
     {
@@ -154,7 +154,7 @@ export default function AppLayout() {
       children: [
         { key: '/finance', icon: <DashboardOutlined />, label: <Link to="/finance">Overview</Link> },
         { key: '/finance/payments', icon: <WalletOutlined />, label: <Link to="/finance/payments">Receipts & Payments</Link> },
-        ...(hasRole('Manager') ? [{ key: '/finance/invoices', icon: <FileProtectOutlined />, label: <Link to="/finance/invoices">Invoices</Link> }] : []),
+        ...(can('invoices.view') ? [{ key: '/finance/invoices', icon: <FileProtectOutlined />, label: <Link to="/finance/invoices">Invoices</Link> }] : []),
       ],
     },
     {
@@ -166,7 +166,7 @@ export default function AppLayout() {
         { key: '/manforce/workers', icon: <TeamOutlined />, label: <Link to="/manforce/workers">Workers</Link> },
         { key: '/manforce/muster', icon: <CalendarOutlined />, label: <Link to="/manforce/muster">Muster Roll</Link> },
         { key: '/manforce/wages', icon: <WalletOutlined />, label: <Link to="/manforce/wages">Wages</Link> },
-        ...(hasRole('Manager') ? [{ key: '/manforce/statutory', icon: <SafetyCertificateOutlined />, label: <Link to="/manforce/statutory">Statutory</Link> }] : []),
+        ...(can('statutory.view') ? [{ key: '/manforce/statutory', icon: <SafetyCertificateOutlined />, label: <Link to="/manforce/statutory">Statutory</Link> }] : []),
       ],
     },
     {
@@ -179,7 +179,7 @@ export default function AppLayout() {
       ],
     },
     // Two entries that were top-level beside six modules; one group, opened only when needed.
-    ...(hasRole('Manager')
+    ...(canAny('masters.view', 'users.view', 'roles.view', 'settings.app')
       ? [
           {
             key: 'settings',
@@ -187,7 +187,8 @@ export default function AppLayout() {
             label: 'Settings',
             children: [
               { key: '/settings/masters', icon: <SettingOutlined />, label: <Link to="/settings/masters">Master Data</Link> },
-              ...(hasRole('Admin') ? [{ key: '/settings/users', icon: <UsergroupAddOutlined />, label: <Link to="/settings/users">Users</Link> }] : []),
+              ...(can('users.view') ? [{ key: '/settings/users', icon: <UsergroupAddOutlined />, label: <Link to="/settings/users">Users</Link> }] : []),
+              ...(can('roles.view') ? [{ key: '/settings/roles', icon: <SafetyCertificateOutlined />, label: <Link to="/settings/roles">Roles</Link> }] : []),
             ],
           },
         ]
@@ -228,7 +229,18 @@ export default function AppLayout() {
         <Dropdown
           menu={{
             items: [
-              { key: 'role', disabled: true, label: <Tag color="#6d4c41">{user?.role}</Tag> },
+              {
+                key: 'role',
+                disabled: true,
+                // An owner is not a role, so it is said separately — and an account with no
+                // role says so rather than showing an empty tag somebody would read as a bug.
+                label: (
+                  <Space size={4}>
+                    <Tag color="#6d4c41">{user?.role?.name ?? 'No role'}</Tag>
+                    {user?.isOwner && <Tag color="#8d6e63">Owner</Tag>}
+                  </Space>
+                ),
+              },
               { type: 'divider' },
               { key: 'password', icon: <KeyOutlined />, label: 'Change password', onClick: () => setPwOpen(true) },
               { key: 'logout', icon: <LogoutOutlined />, label: 'Sign out', onClick: () => { logout(); navigate('/login'); } },

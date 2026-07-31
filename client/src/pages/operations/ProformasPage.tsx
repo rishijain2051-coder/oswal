@@ -20,7 +20,7 @@ const FILTERS = ['All', 'Draft', 'Sent', 'Accepted', 'Rejected'] as const;
 
 export default function ProformasPage() {
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [trashOpen, setTrashOpen] = useState(false);
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -89,17 +89,17 @@ export default function ProformasPage() {
           <Tooltip title="Download the PDF">
             <Button size="small" aria-label="Download this proforma as a PDF" icon={<FilePdfOutlined />} onClick={() => fetchDocument(`/proformas/${r.id}/pdf`, `${r.number}.pdf`, true).catch((e) => message.error(e.message))} />
           </Tooltip>
-          {hasRole('Operator') && !r.order && (
+          {can('proformas.accept') && !r.order && (
             <Tooltip title="Send to buyer">
               <Button size="small" aria-label="Send this proforma to the buyer" icon={<MailOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}`)} />
             </Tooltip>
           )}
-          {hasRole('Operator') && r.canEdit && (
+          {can('proformas.edit') && r.canEdit && (
             <Tooltip title="Edit this proforma">
               <Button size="small" aria-label="Edit this proforma" icon={<EditOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}/edit`)} />
             </Tooltip>
           )}
-          {hasRole('Manager') && !r.order && (
+          {can('proformas.delete') && !r.order && (
             <Popconfirm title="Delete this proforma?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}>
               <Tooltip title="Move to trash">
                 <Button size="small" danger aria-label="Move this proforma to the trash" icon={<DeleteOutlined />} />
@@ -125,8 +125,8 @@ export default function ProformasPage() {
           </Text>
         </div>
         <Space>
-          {hasRole('Manager') && <TrashButton endpoint="/proformas" onClick={() => setTrashOpen(true)} />}
-          {hasRole('Operator') && (
+          {can('proformas.restore') && <TrashButton endpoint="/proformas" onClick={() => setTrashOpen(true)} />}
+          {can('proformas.create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/operations/proformas/new')}>
               New Proforma
             </Button>

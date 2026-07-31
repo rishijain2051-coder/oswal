@@ -17,7 +17,7 @@ const GROUPS: { key: string; label: string; match: string[] }[] = [
 export default function SuppliersPage() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data: suppliers, isLoading } = useSuppliers();
   const [form] = Form.useForm();
   const [open, setOpen] = useState(false);
@@ -43,14 +43,14 @@ export default function SuppliersPage() {
     { title: 'Phone', dataIndex: 'phone', render: (v) => v || '—' },
     { title: 'GST', dataIndex: 'gstNo', render: (v) => v || '—' },
     { title: 'Active', dataIndex: 'isActive', width: 70, render: (v) => (v ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>) },
-    ...(hasRole('Manager') || hasRole('Operator') ? [{
+    ...(can('suppliers.manage') ? [{
       title: '', key: 'a', width: 90,
       render: (_: any, r: Supplier) => (
         <Space>
           <Tooltip title="Edit this supplier">
             <Button size="small" aria-label="Edit this supplier" icon={<EditOutlined />} onClick={() => openEdit(r)} />
           </Tooltip>
-          {hasRole('Manager') && <Popconfirm title="Delete supplier?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}><Tooltip title="Delete this supplier"><Button size="small" danger aria-label="Delete this supplier" icon={<DeleteOutlined />} /></Tooltip></Popconfirm>}
+          {can('suppliers.manage') && <Popconfirm title="Delete supplier?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}><Tooltip title="Delete this supplier"><Button size="small" danger aria-label="Delete this supplier" icon={<DeleteOutlined />} /></Tooltip></Popconfirm>}
         </Space>
       ),
     }] : []),
@@ -61,7 +61,7 @@ export default function SuppliersPage() {
       <Breadcrumb style={{ marginBottom: 16 }} items={[{ title: <Link to="/"><HomeOutlined /></Link> }, { title: <Link to="/operations">Operations</Link> }, { title: 'Suppliers' }]} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div><Title level={3} style={{ margin: 0 }}>Suppliers</Title><Text type="secondary">Grouped by type. Dues appear under Payments.</Text></div>
-        {hasRole('Operator') && <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>Add Supplier</Button>}
+        {can('suppliers.manage') && <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>Add Supplier</Button>}
       </div>
 
       <Collapse defaultActiveKey={['MATERIAL', 'JOBWORK']} items={grouped.map((g) => ({

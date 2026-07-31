@@ -59,6 +59,14 @@ import { assemble, normalizeKey, outlier, summarize, windowStart, type Occurrenc
 import { chargeValue, docKeys, documentTotals, documentValue, lineNet, sameState } from '../src/lib/pricing';
 import { DELIVERY_URGENCY, autoSchedule, daysBetween, deliveryStatus, estimateCompletion } from '../src/lib/scheduling';
 import { survivesWipe } from './wipe';
+import {
+  PERMISSION_KEYS,
+  PERMISSION_MODULES,
+  PERMISSIONS,
+  permissionDef,
+  permissionsByModule,
+  withRequired,
+} from '../src/lib/permissions';
 
 let failed = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -1240,6 +1248,103 @@ console.log('\n--- the client mirrors ---');
         }
       }
     }
+  }
+}
+
+console.log('\n--- permissions: the catalogue and the routes agree ---');
+{
+  /**
+   * The catalogue is code and the roles that use it are data, which leaves exactly two ways
+   * for a permission to become a lie. Both are checked here because neither shows up as a
+   * type error or a failing request — they show up as an Admin ticking a box that does
+   * nothing, or as a route nobody can reach.
+   *
+   * 1. An ORPHAN: a key in the catalogue that no route enforces. It appears in the Roles
+   *    screen with a paragraph describing what it allows, is granted in good faith, and
+   *    guards nothing at all.
+   * 2. A GHOST: a route asking for a key the catalogue does not define. No role can ever be
+   *    granted it, so the route is permanently unreachable by everyone except an owner.
+   */
+  const routesDir = path.join(__dirname, '..', 'src', 'routes');
+  const referenced = new Set<string>();
+  for (const file of fs.readdirSync(routesDir).filter((f) => f.endsWith('.ts'))) {
+    const text = fs.readFileSync(path.join(routesDir, file), 'utf8');
+    // Every guard states its keys as plain single-quoted literals — `can('a.b')`,
+    // `canAny('a.b', 'c.d')`, `may(req, 'a.b')` — so the dotted strings in a route file are
+    // the keys it uses. Anything dotted that is NOT a key is caught by the ghost check.
+    for (const m of text.matchAll(/'([a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+)'/g)) referenced.add(m[1]);
+  }
+
+  const catalogue = new Set(PERMISSION_KEYS);
+  const orphans = [...catalogue].filter((k) => !referenced.has(k));
+  const ghosts = [...referenced].filter((k) => !catalogue.has(k));
+
+  check('every catalogue key is enforced by at least one route', orphans, []);
+  if (orphans.length) console.log(`        orphaned (grant them and nothing happens): ${orphans.join(', ')}`);
+  check('no route asks for a key the catalogue does not define', ghosts, []);
+  if (ghosts.length) console.log(`        ghosts (no role can ever hold them): ${ghosts.join(', ')}`);
+
+  // Keys are the API of the whole thing, so their shape is fixed rather than conventional.
+  const badShape = PERMISSIONS.filter((p) => !/^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/.test(p.key)).map((p) => p.key);
+  check('every key is lower-case dotted segments', badShape, []);
+  check('no key is defined twice', PERMISSION_KEYS.length, catalogue.size);
+
+  // The prose is not decoration — it is what somebody granting the permission reads, and an
+  // empty `blocks` list is the specific omission that makes a grant feel safer than it is.
+  const noWhat = PERMISSIONS.filter((p) => p.what.trim().length < 40).map((p) => p.key);
+  const noAllows = PERMISSIONS.filter((p) => p.allows.length === 0).map((p) => p.key);
+  const noBlocks = PERMISSIONS.filter((p) => p.blocks.length === 0).map((p) => p.key);
+  check('every permission explains what it does', noWhat, []);
+  check('every permission lists what it allows', noAllows, []);
+  check('every permission lists what it does NOT allow', noBlocks, []);
+
+  // A module heading that is not in the list would render in no group and be invisible.
+  const modules = new Set<string>(PERMISSION_MODULES);
+  check('every permission sits in a declared module', PERMISSIONS.filter((p) => !modules.has(p.module as never)).map((p) => p.key), []);
+  check('grouping loses nothing', permissionsByModule().reduce((n, g) => n + g.permissions.length, 0), PERMISSIONS.length);
+
+  // `requires` is walked recursively when a role is saved, so a cycle would hang the save
+  // and a dangling name would silently grant nothing.
+  const dangling = PERMISSIONS.flatMap((p) => (p.requires ?? []).filter((r) => !catalogue.has(r)).map((r) => `${p.key} -> ${r}`));
+  check('no requires points at a key that does not exist', dangling, []);
+  const selfRef = PERMISSIONS.filter((p) => (p.requires ?? []).includes(p.key)).map((p) => p.key);
+  check('nothing requires itself', selfRef, []);
+
+  const cyclic: string[] = [];
+  for (const p of PERMISSIONS) {
+    const seen = new Set<string>();
+    const stack = [p.key];
+    let hit = false;
+    while (stack.length) {
+      const k = stack.pop()!;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      for (const r of permissionDef(k)?.requires ?? []) {
+        if (r === p.key) hit = true;
+        stack.push(r);
+      }
+    }
+    if (hit) cyclic.push(p.key);
+  }
+  check('the requires graph is acyclic', cyclic, []);
+
+  // Closing a set over `requires` is what the save does. It must be idempotent, or saving a
+  // role twice would keep growing it.
+  const oneEdit = withRequired(['orders.edit']);
+  check('closing over requires pulls in the view permission', oneEdit.includes('orders.view'), true);
+  check('closing over requires is idempotent', withRequired(oneEdit).sort(), oneEdit.sort());
+  check('an unknown key is dropped rather than stored', withRequired(['orders.view', 'not.a.real.key']), ['orders.view']);
+  // The deepest chain in the catalogue is three long (purge -> restore -> view), so the walk
+  // has to be recursive rather than one level deep.
+  check('requires is followed transitively', withRequired(['orders.purge']).sort(), ['orders.purge', 'orders.restore', 'orders.view']);
+
+  // The one leak this whole exercise was built to close: the finance reads used to sit behind
+  // `authenticate` alone, so any login could pull every buyer balance and party statement.
+  const financeText = fs.readFileSync(path.join(routesDir, 'ops.production.routes.ts'), 'utf8');
+  for (const route of ['/finance/receivables', '/finance/payables', '/finance/summary', '/finance/parties', '/finance/statement']) {
+    const at = financeText.indexOf(`'${route}',`);
+    const guard = at < 0 ? '' : financeText.slice(at, at + 200);
+    check(`${route} is behind a money permission`, at >= 0 && /can\('money\./.test(guard), true);
   }
 }
 

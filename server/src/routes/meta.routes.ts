@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { COST_HEADS, HEAD_META } from '../lib/costing';
-import { ROLES } from '../middleware/auth';
 import { prisma } from '../db';
 import { asyncHandler, guardIdParams } from '../lib/http';
 import { methodToApi, rowToMethodDef } from '../lib/methods';
@@ -38,7 +37,8 @@ router.get(
     res.json({
       heads: COST_HEADS.map((h) => ({ code: h, ...HEAD_META[h] })),
       methods: methodRows.map((r) => methodToApi(rowToMethodDef(r))),
-      roles: ROLES,
+      // Roles used to be listed here as four fixed names. They are now records created by
+      // the Admin, so the client reads them from /roles instead.
       attributeTypes: ATTRIBUTE_TYPES,
       relationTypes: RELATION_TYPES,
       productStatuses: PRODUCT_STATUSES,

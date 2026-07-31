@@ -18,7 +18,7 @@ const FILTERS = ['All', 'DRAFT', 'ISSUED', 'CANCELLED'] as const;
 export default function InvoicesPage() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [filter, setFilter] = useState<string>('All');
   const [trash, setTrash] = useState(false);
   const { data: rows = [], isLoading } = useInvoices(filter);
@@ -34,7 +34,7 @@ export default function InvoicesPage() {
     onError: (e) => message.error(apiError(e)),
   });
 
-  if (!hasRole('Manager')) return <Result status="403" title="Manager access" subTitle="Invoicing is Manager and above." />;
+  if (!can('invoices.view')) return <Result status="403" title="No access to invoices" subTitle='This needs the "See invoices" permission.' />;
 
   return (
     <div>

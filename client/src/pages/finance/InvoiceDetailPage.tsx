@@ -27,7 +27,7 @@ export default function InvoiceDetailPage() {
   const { id } = useParams();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data: inv, isLoading, error } = useInvoice(id);
 
   const [charges, setCharges] = useState<DocCharge[]>([]);
@@ -90,7 +90,7 @@ export default function InvoiceDetailPage() {
     onError: (e) => message.error(apiError(e)),
   });
 
-  if (!hasRole('Manager')) return <Result status="403" title="Manager access" />;
+  if (!can('invoices.view')) return <Result status="403" title="No access to invoices" subTitle='This needs the "See invoices" permission.' />;
   if (isLoading) return <Spin />;
   // As on the shipment page: an error must say so, not spin.
   if (error || !inv) return <Result status="404" title="Invoice not found" subTitle={error ? apiError(error) : 'It may have been deleted.'} />;

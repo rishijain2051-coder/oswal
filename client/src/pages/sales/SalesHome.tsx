@@ -19,10 +19,10 @@ const SECTIONS = [
 const money = (v: number) => `₹${(v ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
 export default function SalesHome() {
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data: d } = useSalesDashboard();
   const { data: fin } = useFinanceSummary();
-  const canSeeMoney = hasRole('Manager');
+  const canSeeMoney = can('money.view');
   const invoiceBasis = fin?.receivableBasis === 'INVOICE';
 
   return (
@@ -92,7 +92,7 @@ export default function SalesHome() {
       )}
 
       <Row gutter={[16, 16]} style={{ marginTop: 20 }}>
-        {SECTIONS.filter((s) => !s.manager || hasRole('Manager')).map((s) => (
+        {SECTIONS.filter((s) => !s.manager || can('shipments.view')).map((s) => (
           <Col xs={24} sm={12} lg={6} key={s.key}>
             <Link to={s.path}>
               <Card hoverable style={{ borderTop: '3px solid #4e342e', height: '100%' }}>

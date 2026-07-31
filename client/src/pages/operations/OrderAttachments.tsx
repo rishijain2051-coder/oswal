@@ -33,7 +33,7 @@ const kb = (b?: number | null) => (b == null ? '—' : b < 1024 * 1024 ? `${Math
 export default function OrderAttachments({ orderId, orderNumber }: { orderId: number; orderNumber: string }) {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [label, setLabel] = useState<string>('PO_COPY');
 
   const { data, isLoading } = useQuery<OrderAttachment[]>({
@@ -93,7 +93,7 @@ export default function OrderAttachments({ orderId, orderNumber }: { orderId: nu
       }
     >
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
-        {hasRole('Operator') && (
+        {can('orders.attachments.manage') && (
           <Space wrap>
             <Select
               size="small"
@@ -158,7 +158,7 @@ export default function OrderAttachments({ orderId, orderNumber }: { orderId: nu
                 dataIndex: 'label',
                 width: 190,
                 render: (v: string | null, r) =>
-                  hasRole('Operator') ? (
+                  can('orders.attachments.manage') ? (
                     <Select
                       size="small"
                       variant="borderless"
@@ -195,7 +195,7 @@ export default function OrderAttachments({ orderId, orderNumber }: { orderId: nu
                         onClick={() => fetchDocument(`/orders/${orderId}/attachments/${r.id}`, r.originalName ?? r.filename).catch((e) => message.error(apiError(e)))}
                       />
                     </Tooltip>
-                    {hasRole('Manager') && (
+                    {can('orders.attachments.manage') && (
                       <Popconfirm title="Remove this file?" description="The file itself is deleted." okButtonProps={{ danger: true }} onConfirm={() => remove.mutate(r.id)}>
                         <Button size="small" danger type="text" icon={<DeleteOutlined />} />
                       </Popconfirm>

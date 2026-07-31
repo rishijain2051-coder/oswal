@@ -552,21 +552,26 @@ const wipeOperational = () => wipe(prisma);
 
 async function ensureConfig() {
   // The demo advertises these two logins, so it ENFORCES them rather than upserting
-  // with an empty update — a drifted role or password would otherwise leave the demo
+  // with an empty update — a drifted password would otherwise leave the demo
   // unopenable at exactly the wrong moment.
+  //
+  // The first is an OWNER, which holds every permission outside the role system; the demo
+  // seeds no roles, because roles are the Admin's to define and a built-in "Manager" would
+  // just be the old rank under another name. `owner: false` on the second is what makes the
+  // demo show the real default — an account with no role sees nothing.
   const logins = [
-    { email: 'admin@oswal.local', name: 'Administrator', role: 'Admin', password: 'admin123' },
-    { email: 'manager@oswal.local', name: 'Production Manager', role: 'Manager', password: 'manager123' },
+    { email: 'admin@oswal.local', name: 'Administrator', owner: true, password: 'admin123' },
+    { email: 'manager@oswal.local', name: 'Production Manager', owner: false, password: 'manager123' },
   ];
   let admin!: { id: number };
   for (const l of logins) {
     const passwordHash = await bcrypt.hash(l.password, 10);
     const rec = await prisma.user.upsert({
       where: { email: l.email },
-      update: { name: l.name, role: l.role, passwordHash, isActive: true },
-      create: { name: l.name, email: l.email, role: l.role, passwordHash },
+      update: { name: l.name, isOwner: l.owner, passwordHash, isActive: true },
+      create: { name: l.name, email: l.email, isOwner: l.owner, passwordHash },
     });
-    if (l.role === 'Admin') admin = rec;
+    if (l.owner) admin = rec;
   }
 
   for (const c of [

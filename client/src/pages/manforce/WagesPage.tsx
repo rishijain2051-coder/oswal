@@ -23,8 +23,8 @@ export default function WagesPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canManage = hasRole('Manager');
+  const { can } = useAuth();
+  const canManage = can('payments.record');
 
   const [scope, setScope] = useState<'workers' | 'gangs'>('workers');
   const [payTarget, setPayTarget] = useState<PayTarget | null>(null);

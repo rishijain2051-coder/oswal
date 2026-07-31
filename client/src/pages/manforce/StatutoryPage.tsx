@@ -24,8 +24,8 @@ export default function StatutoryPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canManage = hasRole('Manager');
+  const { can } = useAuth();
+  const canManage = can('statutory.post');
 
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf('month'), dayjs().endOf('month')]);
   const [excluded, setExcluded] = useState<Set<number>>(new Set());

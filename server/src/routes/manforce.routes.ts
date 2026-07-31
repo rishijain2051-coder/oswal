@@ -22,7 +22,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole, ROLE_RANK } from '../middleware/auth';
+import { authenticate, can, canAny, may } from '../middleware/auth';
 import { imageUploader, keepRealImages, uploadDir } from '../lib/imageUpload';
 import { nextDocNumber } from '../lib/numbering';
 import { round } from '../lib/costing';
@@ -48,15 +48,11 @@ const router = Router();
 // A route param here is always a database id — see guardIdParams.
 guardIdParams(router);
 router.use(authenticate);
-const canEdit = requireRole('Operator');
-const canManage = requireRole('Manager');
 
 /** Worker photos and ID scans share the uploads folder, named so they stand out. */
 const uploadDocs = imageUploader('worker-');
 
-const isManager = (req: { user?: { role?: string } }) => (ROLE_RANK[req.user?.role ?? ''] ?? 0) >= ROLE_RANK.Manager;
-
-/** Identity and payout details, withheld from anyone below Manager. */
+/** Identity and payout details, withheld unless the caller holds `workers.pii`. */
 const SENSITIVE = ['aadhaarNo', 'panNo', 'uanNo', 'esicNo', 'bankName', 'bankAccountNo', 'bankIfsc', 'upiId'] as const;
 
 function redact<T extends Record<string, any>>(worker: T, manager: boolean): T {
@@ -72,6 +68,7 @@ function redact<T extends Record<string, any>>(worker: T, manager: boolean): T {
 
 router.get(
   '/trades',
+  canAny('masters.view', 'workers.view'),
   asyncHandler(async (_req, res) => {
     const trades = await prisma.trade.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }], include: { _count: { select: { workers: true } } } });
     res.json(trades.map((t) => ({ id: t.id, name: t.name, isActive: t.isActive, sortOrder: t.sortOrder, workers: t._count.workers })));
@@ -82,7 +79,7 @@ const tradeSchema = z.object({ name: z.string().min(1), isActive: z.boolean().op
 
 router.post(
   '/trades',
-  canManage,
+  can('masters.view', 'trades.manage'),
   asyncHandler(async (req, res) => {
     res.status(201).json(await prisma.trade.create({ data: tradeSchema.parse(req.body) }));
   })
@@ -90,7 +87,7 @@ router.post(
 
 router.patch(
   '/trades/:id',
-  canManage,
+  can('masters.view', 'trades.manage'),
   asyncHandler(async (req, res) => {
     res.json(await prisma.trade.update({ where: { id: Number(req.params.id) }, data: tradeSchema.partial().parse(req.body) }));
   })
@@ -98,7 +95,7 @@ router.patch(
 
 router.delete(
   '/trades/:id',
-  canManage,
+  can('masters.view', 'trades.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const trade = await prisma.trade.findUnique({ where: { id }, include: { _count: { select: { workers: true } } } });
@@ -111,6 +108,7 @@ router.delete(
 
 router.get(
   '/contractors',
+  can('workers.view'),
   asyncHandler(async (_req, res) => {
     const rows = await prisma.contractor.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { workers: true } } } });
     res.json(rows.map((c) => ({ ...c, workers: c._count.workers, _count: undefined })));
@@ -133,7 +131,7 @@ const contractorSchema = z.object({
 
 router.post(
   '/contractors',
-  canManage,
+  can('workers.view', 'contractors.manage'),
   asyncHandler(async (req, res) => {
     const data = contractorSchema.parse(req.body);
     const code = data.code?.trim() ? data.code.trim().toUpperCase() : await nextDocNumber('CTR');
@@ -143,7 +141,7 @@ router.post(
 
 router.patch(
   '/contractors/:id',
-  canManage,
+  can('workers.view', 'contractors.manage'),
   asyncHandler(async (req, res) => {
     const data = contractorSchema.partial().parse(req.body);
     res.json(await prisma.contractor.update({ where: { id: Number(req.params.id) }, data: { ...data, ...(data.code ? { code: data.code.toUpperCase() } : {}) } }));
@@ -152,7 +150,7 @@ router.patch(
 
 router.delete(
   '/contractors/:id',
-  canManage,
+  can('workers.view', 'contractors.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const contractor = await prisma.contractor.findUnique({ where: { id } });
@@ -171,6 +169,7 @@ router.delete(
 
 router.get(
   '/workforce/settings',
+  canAny('masters.view', 'workers.view'),
   asyncHandler(async (_req, res) => {
     const setting = await ensureSettings();
     const holidays = await prisma.holiday.findMany({ orderBy: { date: 'asc' } });
@@ -190,7 +189,7 @@ const settingsSchema = z.object({
 
 router.put(
   '/workforce/settings',
-  requireRole('Admin'),
+  can('masters.view', 'workforce.settings'),
   asyncHandler(async (req, res) => {
     const { weeklyOffDays, ...data } = settingsSchema.parse(req.body);
     await ensureSettings();
@@ -207,7 +206,7 @@ router.put(
 
 router.post(
   '/holidays',
-  requireRole('Admin'),
+  can('masters.view', 'holidays.manage'),
   asyncHandler(async (req, res) => {
     const data = z.object({ date: z.string(), name: z.string().min(1) }).parse(req.body);
     const date = dayStart(data.date);
@@ -217,7 +216,7 @@ router.post(
 
 router.delete(
   '/holidays/:id',
-  requireRole('Admin'),
+  can('masters.view', 'holidays.manage'),
   asyncHandler(async (req, res) => {
     await prisma.holiday.delete({ where: { id: Number(req.params.id) } });
     res.status(204).end();
@@ -228,6 +227,7 @@ router.delete(
 
 router.get(
   '/statutory-components',
+  canAny('masters.view', 'statutory.view'),
   asyncHandler(async (_req, res) => {
     const rows = await prisma.statutoryComponent.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }], include: { _count: { select: { coverage: true, lines: true } } } });
     res.json(rows.map((c) => ({ ...c, covered: c._count.coverage, postedLines: c._count.lines, _count: undefined })));
@@ -253,7 +253,7 @@ const componentSchema = z.object({
 
 router.post(
   '/statutory-components',
-  requireRole('Admin'),
+  can('masters.view', 'statutory.components.manage'),
   asyncHandler(async (req, res) => {
     const data = componentSchema.parse(req.body);
     res.status(201).json(await prisma.statutoryComponent.create({ data: { ...data, code: data.code.toUpperCase() } }));
@@ -262,7 +262,7 @@ router.post(
 
 router.patch(
   '/statutory-components/:id',
-  requireRole('Admin'),
+  can('masters.view', 'statutory.components.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = componentSchema.partial().parse(req.body);
@@ -294,7 +294,7 @@ router.patch(
 
 router.delete(
   '/statutory-components/:id',
-  requireRole('Admin'),
+  can('masters.view', 'statutory.components.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const component = await prisma.statutoryComponent.findUnique({ where: { id }, include: { _count: { select: { lines: true, ledger: true } } } });
@@ -314,6 +314,7 @@ router.delete(
 
 router.get(
   '/workers',
+  can('workers.view'),
   asyncHandler(async (req, res) => {
     const q = (req.query.q as string | undefined)?.trim();
     const where: any = {};
@@ -330,14 +331,15 @@ router.get(
     });
 
     // The money is a derived figure, so asking for it costs a full pass over
-    // attendance and the board — only do it when the caller wants it.
-    const ctx = req.query.money === '1' ? await buildWorkforceContext() : null;
+    // attendance and the board — only do it when the caller wants it AND may see it.
+    const wanted = req.query.money === '1' && may(req, 'wages.view');
+    const ctx = wanted ? await buildWorkforceContext() : null;
 
     res.json(
       workers.map((w) => {
         const position = ctx?.accounts.get(w.id)?.position;
         return {
-          ...redact(w, isManager(req)),
+          ...redact(w, may(req, 'workers.pii')),
           documents: undefined,
           photoUrl: w.documents[0]?.url ?? null,
           money: position
@@ -351,6 +353,7 @@ router.get(
 
 router.get(
   '/workers/:id',
+  can('workers.view'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const worker = await prisma.worker.findUnique({
@@ -364,12 +367,24 @@ router.get(
     });
     if (!worker) throw new ApiError(404, 'Worker not found.');
 
+    const identity = {
+      ...redact(worker, may(req, 'workers.pii')),
+      photoUrl: worker.documents.find((d) => d.kind === 'PHOTO')?.url ?? null,
+    };
+
+    // Everything below this line is money — what the worker earned, was paid, owes and is
+    // owed. Withheld whole rather than zeroed, so the page can say "you cannot see wages"
+    // instead of showing a balance of nothing and being believed.
+    if (!may(req, 'wages.view')) {
+      res.json({ ...identity, wagesHidden: true, position: null, earnings: [], deductions: [], advances: [], payments: [], statutoryPosted: [], statement: [] });
+      return;
+    }
+
     const ctx = await buildWorkforceContext();
     const account = ctx.accounts.get(id)!;
 
     res.json({
-      ...redact(worker, isManager(req)),
-      photoUrl: worker.documents.find((d) => d.kind === 'PHOTO')?.url ?? null,
+      ...identity,
       position: account.position,
       earnings: account.earnings.slice(-400).reverse(),
       deductions: account.deductions,
@@ -422,6 +437,23 @@ const workerSchema = z.object({
 const asDate = (v: string | null | undefined) => (v == null || v === '' ? null : new Date(v));
 
 /** A pay type is only meaningful with the rate that goes with it. */
+/**
+ * What a worker IS and what a worker is PAID are separate permissions, so which one a save
+ * needs depends on whether a rate is in the payload. Checked in the handler rather than as
+ * middleware for that reason — one route serves both kinds of edit.
+ *
+ * The pay TYPE counts as a rate: moving somebody from a day rate to piece work changes what
+ * they earn as surely as changing the number does.
+ */
+function guardRates(
+  req: Parameters<typeof may>[0],
+  d: { payType?: string; dailyRate?: number; otHourlyRate?: number; monthlySalary?: number }
+): void {
+  const touches = d.payType !== undefined || d.dailyRate !== undefined || d.otHourlyRate !== undefined || d.monthlySalary !== undefined;
+  if (!touches || may(req, 'workers.rates')) return;
+  throw new ApiError(403, 'You do not have permission to do this. Setting a pay type or rate needs "Set worker pay rates".');
+}
+
 function checkRates(payType: string | undefined, data: { dailyRate?: number; monthlySalary?: number }, existing?: { dailyRate: number; monthlySalary: number }) {
   const daily = data.dailyRate ?? existing?.dailyRate ?? 0;
   const monthly = data.monthlySalary ?? existing?.monthlySalary ?? 0;
@@ -439,9 +471,10 @@ async function applyCoverage(workerId: number, componentIds: number[] | undefine
 
 router.post(
   '/workers',
-  canManage,
+  can('workers.view', 'workers.manage'),
   asyncHandler(async (req, res) => {
     const { statutoryComponentIds, ...data } = workerSchema.parse(req.body);
+    guardRates(req, data);
     checkRates(data.payType ?? 'DAY', data);
     if (data.contractorId && !(await prisma.contractor.findUnique({ where: { id: data.contractorId } }))) throw new ApiError(404, 'Contractor not found.');
 
@@ -466,12 +499,13 @@ router.post(
 
 router.patch(
   '/workers/:id',
-  canManage,
+  can('workers.view', 'workers.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.worker.findUnique({ where: { id } });
     if (!existing) throw new ApiError(404, 'Worker not found.');
     const { statutoryComponentIds, ...data } = workerSchema.partial().parse(req.body);
+    guardRates(req, data);
     checkRates(data.payType ?? existing.payType, data, existing);
 
     // Moving a worker into or out of a gang changes who gets paid, so it cannot be
@@ -526,7 +560,7 @@ router.patch(
 
 router.delete(
   '/workers/:id',
-  canManage,
+  can('workers.view', 'workers.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const worker = await prisma.worker.findUnique({ where: { id } });
@@ -554,7 +588,7 @@ router.delete(
 
 router.post(
   '/workers/:id/documents',
-  canManage,
+  can('workers.view', 'workers.documents'),
   uploadDocs.array('files', 10),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
@@ -577,7 +611,7 @@ router.post(
 
 router.delete(
   '/worker-documents/:id',
-  canManage,
+  can('workers.view', 'workers.documents'),
   asyncHandler(async (req, res) => {
     const doc = await prisma.workerDocument.findUnique({ where: { id: Number(req.params.id) } });
     if (!doc) throw new ApiError(404, 'Document not found.');
@@ -597,6 +631,7 @@ router.delete(
 
 router.get(
   '/attendance',
+  can('workers.view', 'muster.view'),
   asyncHandler(async (req, res) => {
     const date = dayStart((req.query.date as string) || new Date());
     const { rules, holidays } = await loadRules();
@@ -655,7 +690,7 @@ const musterSchema = z.object({
 
 router.post(
   '/attendance',
-  canEdit,
+  can('workers.view', 'muster.view', 'muster.mark'),
   asyncHandler(async (req, res) => {
     const data = musterSchema.parse(req.body);
     const date = dayStart(data.date);
@@ -692,6 +727,7 @@ router.post(
 /** One worker's month, day by day, with what each day is worth. */
 router.get(
   '/attendance/worker/:id',
+  can('workers.view', 'muster.view'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const worker = await prisma.worker.findUnique({ where: { id }, select: workerSelect });
@@ -745,7 +781,7 @@ router.get(
  */
 router.post(
   '/workers/:id/advances',
-  canManage,
+  can('workers.view', 'wages.view', 'advances.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const worker = await prisma.worker.findUnique({ where: { id } });
@@ -794,7 +830,7 @@ router.post(
 
 router.delete(
   '/advances/:id',
-  canManage,
+  can('workers.view', 'wages.view', 'advances.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const advance = await prisma.workerAdvance.findUnique({ where: { id } });
@@ -809,7 +845,7 @@ router.delete(
 
 router.post(
   '/workers/:id/deductions',
-  canManage,
+  can('workers.view', 'wages.view', 'deductions.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     if (!(await prisma.worker.findUnique({ where: { id } }))) throw new ApiError(404, 'Worker not found.');
@@ -826,7 +862,7 @@ router.post(
 
 router.delete(
   '/deductions/:id',
-  canManage,
+  can('workers.view', 'wages.view', 'deductions.manage'),
   asyncHandler(async (req, res) => {
     await prisma.workerDeduction.delete({ where: { id: Number(req.params.id) } });
     res.status(204).end();
@@ -843,7 +879,7 @@ const parseIds = (v: string | number[] | undefined) => (v == null ? undefined : 
 
 router.get(
   '/statutory/preview',
-  canManage,
+  can('workers.view', 'statutory.view'),
   asyncHandler(async (req, res) => {
     const q = periodSchema.parse(req.query);
     const from = dayStart(q.from);
@@ -871,6 +907,7 @@ router.get(
 
 router.get(
   '/statutory/postings',
+  can('workers.view', 'statutory.view'),
   asyncHandler(async (_req, res) => {
     const rows = await prisma.statutoryPosting.findMany({ orderBy: [{ periodFrom: 'desc' }, { id: 'desc' }], include: { lines: { include: { component: { select: { code: true } } } } } });
     res.json(
@@ -901,7 +938,7 @@ router.get(
  */
 router.post(
   '/statutory/postings',
-  canManage,
+  can('workers.view', 'statutory.view', 'statutory.post'),
   asyncHandler(async (req, res) => {
     const data = z
       .object({
@@ -952,7 +989,7 @@ router.post(
 
 router.delete(
   '/statutory/postings/:id',
-  canManage,
+  can('workers.view', 'statutory.view', 'statutory.post'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const posting = await prisma.statutoryPosting.findUnique({ where: { id }, include: { lines: { select: { componentId: true } } } });
@@ -970,6 +1007,7 @@ router.delete(
 
 router.get(
   '/manforce/summary',
+  canAny('workers.view', 'wages.view'),
   asyncHandler(async (_req, res) => {
     const today = dayStart(new Date());
     const [ctx, { rules, holidays }] = await Promise.all([buildWorkforceContext(), loadRules()]);

@@ -38,7 +38,7 @@ export default function ShipmentEditPage() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
 
   const { data: existing } = useShipment(isNew ? undefined : id);
   const { data: buyers = [] } = useBuyers();
@@ -218,7 +218,7 @@ export default function ShipmentEditPage() {
     onError: (e) => message.error(apiError(e)),
   });
 
-  if (!hasRole('Manager')) return <Result status="403" title="Manager access" subTitle="Dispatch is Manager and above." />;
+  if (!can('shipments.edit')) return <Result status="403" title="No access to dispatch" subTitle='This needs the "Edit shipments" permission.' />;
 
   return (
     <div>

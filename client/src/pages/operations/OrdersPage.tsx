@@ -21,7 +21,7 @@ const FILTERS = ['All', 'Live', 'Confirmed', 'Production', 'Ready', 'Shipped', '
 
 export default function OrdersPage() {
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [trashOpen, setTrashOpen] = useState(false);
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -109,12 +109,12 @@ export default function OrdersPage() {
           <Tooltip title="Open this order">
             <Button size="small" aria-label="Open this order" icon={<EyeOutlined />} onClick={() => navigate(`/operations/orders/${r.id}`)} />
           </Tooltip>
-          {hasRole('Operator') && (
+          {can('orders.edit') && (
             <Tooltip title="Edit this order">
               <Button size="small" aria-label="Edit this order" icon={<EditOutlined />} onClick={() => navigate(`/operations/orders/${r.id}/edit`)} />
             </Tooltip>
           )}
-          {hasRole('Manager') && (
+          {can('orders.delete') && (
             <Popconfirm
               title="Delete this order?"
               description="Its production history, hand-over photos and money entries go with it."
@@ -142,8 +142,8 @@ export default function OrdersPage() {
           <Text type="secondary">Open one to see and move every piece through its stages.</Text>
         </div>
         <Space>
-          {hasRole('Manager') && <TrashButton endpoint="/orders" onClick={() => setTrashOpen(true)} />}
-          {hasRole('Operator') && (
+          {can('orders.restore') && <TrashButton endpoint="/orders" onClick={() => setTrashOpen(true)} />}
+          {can('orders.create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/operations/orders/new')}>
               New Order
             </Button>

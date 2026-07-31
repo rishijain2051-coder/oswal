@@ -17,10 +17,28 @@ export interface TrashRow {
 /**
  * What is in the trash, and the two things you can do with it.
  *
- * Nothing here expires: items wait until somebody decides. Restore is Manager+, but
- * destroying for good is Admin-only, because that is the one action in the app that
- * genuinely loses data.
+ * Nothing here expires: items wait until somebody decides. Restoring and destroying for good
+ * are separate permissions per record type, because destroying is the one action in the app
+ * that genuinely loses data.
  */
+
+/**
+ * Which permission lets somebody destroy a record of this kind for good.
+ *
+ * Keyed on the collection endpoint the drawer was handed, so one generic component serves
+ * seven record types without being told twice. An endpoint missing from this map shows NO
+ * permanent-delete button at all — a new trashable model must be added here deliberately
+ * rather than inheriting somebody else's purge permission by accident.
+ */
+const PURGE_PERMISSION: Record<string, string> = {
+  '/products': 'products.purge',
+  '/orders': 'orders.purge',
+  '/proformas': 'proformas.purge',
+  '/operation-sheets': 'sheets.purge',
+  '/payments': 'payments.purge',
+  '/shipments': 'shipments.purge',
+  '/invoices': 'invoices.purge',
+};
 export default function TrashDrawer({
   open,
   onClose,
@@ -44,9 +62,12 @@ export default function TrashDrawer({
 }) {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  // hasRole is how the rest of the app asks, so the rule lives in one place.
-  const { hasRole } = useAuth();
-  const isAdmin = hasRole('Admin');
+  // Permanent delete is per record type, so the drawer asks about the endpoint it was
+  // given rather than about a rank. An endpoint with no purge permission listed shows no
+  // permanent-delete affordance at all, which is the safe direction to fail in.
+  const { can } = useAuth();
+  const purgeKey = PURGE_PERMISSION[endpoint];
+  const isAdmin = purgeKey ? can(purgeKey) : false;
 
   const { data, isLoading } = useQuery<TrashRow[]>({
     queryKey: ['trash', endpoint],

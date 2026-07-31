@@ -28,7 +28,7 @@ export default function ShipmentDetailPage() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data: s, isLoading, error } = useShipment(id);
   const [invoicing, setInvoicing] = useState(false);
   const [invoiceBuyer, setInvoiceBuyer] = useState<number>();
@@ -58,7 +58,7 @@ export default function ShipmentDetailPage() {
     onError: (e) => message.error(apiError(e)),
   });
 
-  if (!hasRole('Manager')) return <Result status="403" title="Manager access" />;
+  if (!can('shipments.view')) return <Result status="403" title="No access to shipments" subTitle='This needs the "See shipments" permission.' />;
   if (isLoading) return <Spin />;
   // Say what went wrong rather than spinning forever: a 404 or a 410 leaves `isLoading`
   // false and the data undefined, which an `isLoading || !s` guard would sit on indefinitely.

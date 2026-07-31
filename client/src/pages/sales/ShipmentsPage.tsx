@@ -17,7 +17,7 @@ const FILTERS = ['All', 'PLANNED', 'LOADED', 'SHIPPED', 'DELIVERED', 'CANCELLED'
 export default function ShipmentsPage() {
   const qc = useQueryClient();
   const nav = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [filter, setFilter] = useState<string>('All');
   const [trash, setTrash] = useState(false);
   const { data: rows = [], isLoading } = useShipments(filter);
@@ -34,7 +34,7 @@ export default function ShipmentsPage() {
   });
 
   // Gated in the sidebar too, so this only catches somebody typing the URL.
-  if (!hasRole('Manager')) {
+  if (!can('shipments.view')) {
     return <Result status="403" title="Manager access" subTitle="Dispatch and invoicing are Manager and above." />;
   }
 

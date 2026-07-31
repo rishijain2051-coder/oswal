@@ -20,8 +20,8 @@ const REASONS = [
 
 export default function FinishedStockPage() {
   const qc = useQueryClient();
-  const { hasRole } = useAuth();
-  const canEdit = hasRole('Manager');
+  const { can } = useAuth();
+  const canEdit = can('finished.adjust');
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
 

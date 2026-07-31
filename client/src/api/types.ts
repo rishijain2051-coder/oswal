@@ -1,9 +1,55 @@
+export interface UserRoleRef {
+  id: number;
+  name: string | null;
+  /**
+   * Present on `/users` but not on `/auth/me`, which reports only what the signed-in user
+   * effectively holds — a deactivated role has already resolved to no permissions there, so
+   * saying it is inactive would be a distinction without a difference.
+   */
+  isActive?: boolean;
+}
+
 export interface User {
   id: number;
   name: string;
   email: string;
-  role: 'Admin' | 'Manager' | 'Operator' | 'Viewer' | string;
+  /**
+   * The role this account holds, or null for an account that has been created but not yet
+   * given one — which means no permissions at all rather than some default rank.
+   */
+  role: UserRoleRef | null;
+  /** Holds every permission regardless of role. Cannot be true of nobody. */
+  isOwner: boolean;
+  /**
+   * The resolved permission keys. A HINT for hiding what cannot be done — never a
+   * safeguard. Every route re-checks, because a list handed to a browser is a list the
+   * browser can edit.
+   */
+  permissions: string[];
   isActive?: boolean;
+}
+
+/** One entry of the catalogue, as `GET /roles/permissions` returns it. */
+export interface PermissionDef {
+  key: string;
+  module: string;
+  label: string;
+  what: string;
+  allows: string[];
+  blocks: string[];
+  risk: 'normal' | 'sensitive' | 'destructive';
+  requires?: string[];
+}
+
+export interface Role {
+  id: number;
+  name: string;
+  description: string;
+  isActive: boolean;
+  users: number;
+  permissions: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Currency {

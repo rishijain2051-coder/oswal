@@ -27,8 +27,8 @@ const containerTypeFields: FieldDef[] = [
 export default function SalesTab() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canEdit = hasRole('Admin');
+  const { can } = useAuth();
+  const canEdit = can('settings.app');
   const { data } = useAppSettings();
   const [form] = Form.useForm();
 

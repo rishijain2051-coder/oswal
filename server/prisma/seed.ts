@@ -11,16 +11,24 @@ async function main() {
   console.log('Seeding Oswal Handicrafts ERP...');
 
   // --- Users ---------------------------------------------------------------
+  //
+  // NO ROLES ARE SEEDED, deliberately: roles are entirely the Admin's to define, and a
+  // "Manager" shipped in the seed would be a built-in rank wearing a different hat. The first
+  // account is an OWNER instead — owners hold every permission outside the role system, which
+  // is what guarantees somebody can sign in and build the roles in the first place.
+  //
+  // The second account gets no role at all, so it demonstrates the real default: it can sign
+  // in and see nothing until somebody grants it something.
   const passwordHash = await bcrypt.hash('admin123', 10);
   const admin = await prisma.user.upsert({
     where: { email: 'admin@oswal.local' },
-    update: {},
-    create: { name: 'Administrator', email: 'admin@oswal.local', role: 'Admin', passwordHash },
+    update: { isOwner: true },
+    create: { name: 'Administrator', email: 'admin@oswal.local', isOwner: true, passwordHash },
   });
   await prisma.user.upsert({
     where: { email: 'manager@oswal.local' },
     update: {},
-    create: { name: 'Production Manager', email: 'manager@oswal.local', role: 'Manager', passwordHash: await bcrypt.hash('manager123', 10) },
+    create: { name: 'Production Manager', email: 'manager@oswal.local', passwordHash: await bcrypt.hash('manager123', 10) },
   });
 
   // --- Currencies ----------------------------------------------------------

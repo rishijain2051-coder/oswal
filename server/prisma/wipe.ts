@@ -6,9 +6,15 @@
  * model, add it here — a table left out keeps rows that point at records by id, and
  * they resurface attached to whichever new record is later given that id.
  *
- * Configuration is deliberately NOT touched: logins, currencies, units, attributes,
- * cost formulas, stage lines, trades, holidays, workforce settings and statutory
- * components are setup, not data.
+ * Configuration is deliberately NOT touched: logins, ROLES AND THEIR PERMISSIONS,
+ * currencies, units, attributes, cost formulas, stage lines, trades, holidays, workforce
+ * settings and statutory components are setup, not data.
+ *
+ * `Role` and `RolePermission` are the newest members of that list and the easiest to add
+ * here by mistake, because the rule above says "if you add a model, add it here". They are
+ * an exception for the same reason `User` is: wiping them would sign the factory out of its
+ * own ERP, and the only account left able to repair it would be an owner. A role is who may
+ * do what, which survives a data wipe exactly as a login does.
  */
 import fs from 'node:fs';
 import path from 'node:path';

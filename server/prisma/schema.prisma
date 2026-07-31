@@ -26,12 +26,54 @@ model User {
   name         String
   email        String   @unique
   passwordHash String
-  role         String   @default("Operator") // Admin | Manager | Operator | Viewer
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  // What this account may do. NULL means no role and therefore NO permissions — a
+  // deliberate default: a new login can sign in and see nothing until somebody grants it
+  // something, rather than inheriting a rank nobody chose.
+  roleId Int?
+  role   Role? @relation(fields: [roleId], references: [id])
+
+  // The key under the mat. An owner holds every permission in the catalogue regardless of
+  // their role, and sits OUTSIDE the role system on purpose: permissions are resolved from
+  // the database on every request, so a role that lost `roles.manage` would otherwise be
+  // unrecoverable without direct database surgery. The last active owner cannot be
+  // deactivated, deleted, or demoted — see `guardLastOwner` in users.routes.ts.
+  isOwner Boolean @default(false)
+
   productsCreated Product[] @relation("ProductCreatedBy")
+}
+
+/// A named set of permissions. Wholly user-defined — the app ships none, and there is no
+/// built-in rank behind them. `isActive` follows the master-data convention rather than
+/// `deletedAt`; a role is configuration, not a record of something that happened.
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String   @default("")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       User[]
+}
+
+/// One granted permission key. The KEY IS NOT VALIDATED BY THE DATABASE — it is checked
+/// against the catalogue in `lib/permissions.ts` on the way in, because that file is the
+/// single authority for which permissions exist and a foreign key to a table of them would
+/// be a second one. `verify.ts` asserts the catalogue and the routes agree.
+model RolePermission {
+  id     Int    @id @default(autoincrement())
+  roleId Int
+  key    String
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, key])
+  @@index([roleId])
 }
 
 // ---------------------------------------------------------------------------

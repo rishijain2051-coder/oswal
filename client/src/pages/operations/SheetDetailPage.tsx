@@ -21,8 +21,8 @@ export default function SheetDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const editable = hasRole('Operator');
+  const { can } = useAuth();
+  const editable = can('sheets.create');
   const { data: s, isLoading, isError } = useSheet(id);
   const { data: meta } = useMeta();
 

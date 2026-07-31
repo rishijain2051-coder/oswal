@@ -17,7 +17,7 @@ const RELATION_LABEL: Record<string, string> = { VARIANT: 'Variant', PART: 'Part
 export default function ProductDetailPage({ catalogueMode = false }: { catalogueMode?: boolean } = {}) {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data: p, isLoading, isError } = useProduct(id);
 
   const backTo = catalogueMode ? '/products/catalogue' : '/products/list';
@@ -145,7 +145,7 @@ export default function ProductDetailPage({ catalogueMode = false }: { catalogue
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backTo)}>
             {catalogueMode ? 'Back to Catalogue' : 'Back'}
           </Button>
-          {!catalogueMode && hasRole('Operator') && (
+          {!catalogueMode && can('products.edit') && (
             <Button type="primary" icon={<EditOutlined />} onClick={() => navigate(`/products/${p.id}/edit`)}>
               Edit
             </Button>
@@ -171,7 +171,7 @@ export default function ProductDetailPage({ catalogueMode = false }: { catalogue
           {
             key: 'images',
             label: `Images (${p.images.length})`,
-            children: <ProductImages productId={p.id} images={p.images} editable={!catalogueMode && hasRole('Operator')} />,
+            children: <ProductImages productId={p.id} images={p.images} editable={!catalogueMode && can('products.photos')} />,
           },
         ]}
       />

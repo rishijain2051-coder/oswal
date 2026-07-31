@@ -18,7 +18,7 @@ const { Title, Text } = Typography;
  */
 export default function SheetsPage() {
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { message } = App.useApp();
   const qc = useQueryClient();
   const { data, isLoading } = useSheets();
@@ -94,7 +94,7 @@ export default function SheetsPage() {
       render: (_, r) => (
         <Space>
           <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/operations/sheets/${r.id}`)} />
-          {hasRole('Manager') && (
+          {can('sheets.delete') && (
             <Popconfirm title="Delete this sheet?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}>
               <Button size="small" danger icon={<DeleteOutlined />} />
             </Popconfirm>
@@ -115,8 +115,8 @@ export default function SheetsPage() {
           <Text type="secondary">What a job needs — wood, hardware, polish, packing, labour — exploded from the product costing and printable per section.</Text>
         </div>
         <Space>
-          {hasRole('Manager') && <TrashButton endpoint="/operation-sheets" onClick={() => setTrashOpen(true)} />}
-          {hasRole('Operator') && (
+          {can('sheets.restore') && <TrashButton endpoint="/operation-sheets" onClick={() => setTrashOpen(true)} />}
+          {can('sheets.create') && (
           <Button
             type="primary"
             icon={<PlusOutlined />}

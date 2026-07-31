@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, can, canAny, may } from '../middleware/auth';
 import { nextDocNumber } from '../lib/numbering';
 import { computeCostSheet } from '../lib/productCosting';
 import { loadMethodMap } from '../lib/methods';
@@ -32,8 +32,6 @@ const router = Router();
 // A route param here is always a database id — see guardIdParams.
 guardIdParams(router);
 router.use(authenticate);
-const canEdit = requireRole('Operator');
-const canManage = requireRole('Manager');
 
 // ---------------------------------------------------------------------------
 // Material sheets — the live costing explosion for a product × qty.
@@ -95,6 +93,7 @@ async function explosionFor(productId: number, qty: number) {
 
 router.get(
   '/operation-sheets',
+  can('sheets.view'),
   asyncHandler(async (req, res) => {
     const where = { ...notDeleted, ...(req.query.orderId ? { orderId: Number(req.query.orderId) } : {}) };
     res.json(await prisma.operationSheet.findMany({ where, include: sheetInclude, orderBy: { createdAt: 'desc' } }));
@@ -103,7 +102,7 @@ router.get(
 
 router.get(
   '/operation-sheets/trash',
-  canManage,
+  can('sheets.view', 'sheets.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.operationSheet.findMany({
@@ -117,6 +116,7 @@ router.get(
 
 router.get(
   '/operation-sheets/:id',
+  can('sheets.view'),
   asyncHandler(async (req, res) => {
     const sheet = await prisma.operationSheet.findUnique({ where: { id: Number(req.params.id) }, include: sheetInclude });
     if (!sheet) throw new ApiError(404, 'Material sheet not found.');
@@ -128,6 +128,7 @@ router.get(
 /** The material sheet as a printable working document. */
 router.get(
   '/operation-sheets/:id/pdf',
+  can('sheets.view', 'sheets.documents'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const [sheet, co] = await Promise.all([
@@ -170,7 +171,7 @@ const sheetSchema = z.object({
  */
 router.post(
   '/operation-sheets',
-  canEdit,
+  can('sheets.view', 'sheets.create'),
   asyncHandler(async (req, res) => {
     const data = sheetSchema.parse(req.body);
     // A material sheet for a hidden product would explode a costing nobody can open.
@@ -211,7 +212,7 @@ router.post(
 
 router.put(
   '/operation-sheets/:id',
-  canEdit,
+  can('sheets.view', 'sheets.create'),
   asyncHandler(async (req, res) => {
     const data = sheetSchema.parse(req.body);
     const sheet = await prisma.operationSheet.update({
@@ -229,7 +230,7 @@ router.put(
 
 router.post(
   '/operation-sheets/:id/restore',
-  canManage,
+  can('sheets.view', 'sheets.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.operationSheet.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -242,7 +243,7 @@ router.post(
 
 router.delete(
   '/operation-sheets/:id/permanent',
-  requireRole('Admin'),
+  can('sheets.view', 'sheets.restore', 'sheets.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.operationSheet.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -255,7 +256,7 @@ router.delete(
 
 router.delete(
   '/operation-sheets/:id',
-  canManage,
+  can('sheets.view', 'sheets.delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.operationSheet.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -557,6 +558,7 @@ function billedPosition(entries: FinanceEntry[], partyType: 'SUPPLIER' | 'WORKER
 
 router.get(
   '/finance/receivables',
+  can('money.view'),
   asyncHandler(async (_req, res) => {
     const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
     const buyerIds = [...new Set(orders.map((o) => o.buyerId))];
@@ -639,6 +641,7 @@ router.get(
  */
 router.get(
   '/finance/receivables/summary',
+  can('money.view'),
   asyncHandler(async (_req, res) => {
     const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
     const rows: ForexOrderRow[] = [];
@@ -669,6 +672,7 @@ router.get(
 
 router.get(
   '/finance/payables',
+  can('money.view'),
   asyncHandler(async (_req, res) => {
     const { orders, entries, rateOf, symbolOf, ourState } = await financeData();
 
@@ -1097,6 +1101,7 @@ async function financeTotals() {
 
 router.get(
   '/finance/summary',
+  can('money.view'),
   asyncHandler(async (_req, res) => {
     res.json(await financeTotals());
   })
@@ -1106,6 +1111,7 @@ router.get(
 
 router.get(
   '/finance/parties',
+  can('money.view'),
   asyncHandler(async (_req, res) => {
     const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
     const out: any[] = [];
@@ -1192,6 +1198,7 @@ router.get(
  */
 router.get(
   '/finance/statement',
+  can('money.view', 'money.statements'),
   asyncHandler(async (req, res) => {
     const q = z
       .object({
@@ -1396,6 +1403,7 @@ router.get(
 
 router.get(
   '/payments',
+  can('payments.view'),
   asyncHandler(async (req, res) => {
     const where: any = {};
     if (req.query.partyType) where.partyType = req.query.partyType;
@@ -1444,7 +1452,7 @@ const ledgerSchema = z.object({
 
 router.post(
   '/payments',
-  canManage,
+  can('payments.view', 'payments.record'),
   asyncHandler(async (req, res) => {
     const data = ledgerSchema.parse(req.body);
 
@@ -1555,7 +1563,7 @@ router.post(
 
 router.get(
   '/payments/trash',
-  canManage,
+  can('payments.view', 'payments.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.ledgerEntry.findMany({
@@ -1569,7 +1577,7 @@ router.get(
 
 router.delete(
   '/payments/:id',
-  canManage,
+  can('payments.view', 'payments.delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const entry = await prisma.ledgerEntry.findUnique({ where: { id }, include: { advance: { select: { id: true } } } });
@@ -1588,7 +1596,7 @@ router.delete(
 
 router.post(
   '/payments/:id/restore',
-  canManage,
+  can('payments.view', 'payments.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.ledgerEntry.findUnique({ where: { id }, select: { deletedAt: true } });
@@ -1601,7 +1609,7 @@ router.post(
 
 router.delete(
   '/payments/:id/permanent',
-  requireRole('Admin'),
+  can('payments.view', 'payments.restore', 'payments.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.ledgerEntry.findUnique({ where: { id }, select: { deletedAt: true } });
@@ -1618,6 +1626,7 @@ router.delete(
 
 router.get(
   '/ops/dashboard',
+  canAny('orders.view', 'board.view', 'money.view'),
   asyncHandler(async (_req, res) => {
     const [openOrders, awaitingDecision, recentProformas, rawItems, stockGrouped, liveLines, financials] = await Promise.all([
       prisma.order.findMany({ where: { ...notDeleted, status: { notIn: ['Shipped', 'Closed', 'Cancelled'] } }, select: { id: true } }),

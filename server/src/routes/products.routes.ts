@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, can, may } from '../middleware/auth';
 import { computeCostSheet } from '../lib/productCosting';
 import { loadMethodMap } from '../lib/methods';
 import { live, notDeleted, restore, softDelete } from '../lib/softDelete';
@@ -19,10 +19,45 @@ const router = Router();
 guardIdParams(router);
 router.use(authenticate);
 
-const canEdit = requireRole('Operator');
-
 // Image upload storage — see lib/imageUpload.ts for why contents are checked.
 const upload = imageUploader('');
+
+/**
+ * A product's costing is the factory's cost base and margin, so it is a separate permission
+ * from seeing the product at all — a sales person may need the specification and the photos
+ * without the rates behind them.
+ *
+ * The stripping happens HERE, on the way out, rather than in the client. The cost sheet
+ * shares a response with the specification, so filtering it in the browser would still put
+ * every rate on the wire for anyone with a login. Same discipline as `redact()` for worker
+ * identity in manforce.routes.ts.
+ */
+function stripCosting<T extends Record<string, any>>(row: T): T {
+  return {
+    ...row,
+    costSheet: undefined,
+    currency: undefined,
+    exFactory: null,
+    fob: null,
+    nonFob: null,
+    costingHidden: true,
+  };
+}
+
+const maybeStrip = <T extends Record<string, any>>(req: Parameters<typeof may>[0], rows: T[]): T[] =>
+  may(req, 'products.costing.view') ? rows : rows.map(stripCosting);
+
+/**
+ * Saving a product REPLACES its cost sheet, so a save that carries one is a costing edit
+ * whether or not any rate actually changed — and a save that carries none from somebody
+ * without the permission would silently delete the sheet. Both are refused, which is why
+ * this checks for the sheet's presence rather than diffing it.
+ */
+function guardCosting(req: Parameters<typeof may>[0], costSheet: unknown): void {
+  if (costSheet == null) return;
+  if (may(req, 'products.costing.edit')) return;
+  throw new ApiError(403, 'You do not have permission to do this. Changing a product\'s rates needs "Edit product costings".');
+}
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -308,6 +343,7 @@ function serializeFull(product: any, methods: MethodMap) {
 
 router.get(
   '/',
+  can('products.view'),
   asyncHandler(async (req, res) => {
     const q = (req.query.q as string | undefined)?.trim();
     const numParam = (v: unknown) => (v != null && v !== '' ? Number(v) : undefined);
@@ -332,19 +368,20 @@ router.get(
       loadMethodMap(),
       prisma.product.findMany({ where: live(where), include: listInclude, orderBy: { updatedAt: 'desc' } }),
     ]);
-    res.json(products.map((p) => summarize(p, methods)));
+    res.json(maybeStrip(req, products.map((p) => summarize(p, methods))));
   })
 );
 
 // Executive-summary view (same data, compact) for the Product Catalogue.
 router.get(
   '/catalogue',
-  asyncHandler(async (_req, res) => {
+  can('products.view'),
+  asyncHandler(async (req, res) => {
     const [methods, products] = await Promise.all([
       loadMethodMap(),
       prisma.product.findMany({ where: notDeleted, include: listInclude, orderBy: { factoryCode: 'asc' } }),
     ]);
-    res.json(products.map((p) => summarize(p, methods)));
+    res.json(maybeStrip(req, products.map((p) => summarize(p, methods))));
   })
 );
 
@@ -355,7 +392,7 @@ router.get(
 /** What is in the trash. Declared before `/:id` so the literal path wins. */
 router.get(
   '/trash',
-  requireRole('Manager'),
+  can('products.view', 'products.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.product.findMany({
@@ -369,6 +406,7 @@ router.get(
 
 router.get(
   '/:id',
+  can('products.view'),
   asyncHandler(async (req, res) => {
     const [methods, product] = await Promise.all([
       loadMethodMap(),
@@ -378,7 +416,7 @@ router.get(
     // Reachable from a bookmark or a stale tab. Say it is in the trash rather than
     // rendering a page whose Save would silently resurrect it.
     if (product.deletedAt) throw new ApiError(410, `${product.factoryCode} is in the trash. Restore it to open it.`);
-    res.json(serializeFull(product, methods));
+    res.json(maybeStrip(req, [serializeFull(product, methods)])[0]);
   })
 );
 
@@ -388,9 +426,10 @@ router.get(
 
 router.post(
   '/',
-  canEdit,
+  can('products.view', 'products.create'),
   asyncHandler(async (req, res) => {
     const data = productSchema.parse(req.body);
+    guardCosting(req, data.costSheet);
     await checkStageSteps(data);
     const product = await prisma.product.create({
       data: {
@@ -414,7 +453,7 @@ router.post(
 
 router.put(
   '/:id',
-  canEdit,
+  can('products.view', 'products.edit'),
   asyncHandler(async (req, res) => {
     // A trashed product must not be edited back to life through a stale tab.
     {
@@ -424,6 +463,7 @@ router.put(
     }
     const id = Number(req.params.id);
     const data = productSchema.parse(req.body);
+    guardCosting(req, data.costSheet);
     await checkStageSteps(data);
 
     // Read the old costing BEFORE the sheet is replaced, or its rates are gone and
@@ -477,7 +517,7 @@ async function productReferences(id: number) {
 
 router.post(
   '/:id/restore',
-  requireRole('Manager'),
+  can('products.view', 'products.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.product.findUnique({ where: { id }, select: { deletedAt: true, factoryCode: true } });
@@ -494,7 +534,7 @@ router.post(
  */
 router.delete(
   '/:id/permanent',
-  requireRole('Admin'),
+  can('products.view', 'products.restore', 'products.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.product.findUnique({ where: { id }, select: { deletedAt: true, factoryCode: true } });
@@ -533,7 +573,7 @@ router.delete(
  */
 router.delete(
   '/:id',
-  requireRole('Manager'),
+  can('products.view', 'products.delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const product = await prisma.product.findUnique({ where: { id }, select: { factoryCode: true, name: true, deletedAt: true } });
@@ -558,7 +598,7 @@ router.delete(
 
 router.post(
   '/:id/images',
-  canEdit,
+  can('products.view', 'products.photos'),
   upload.array('images', 20),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
@@ -598,7 +638,7 @@ const imagePatchSchema = z.object({
 
 router.patch(
   '/:id/images/:imageId',
-  canEdit,
+  can('products.view', 'products.photos'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const imageId = Number(req.params.imageId);
@@ -620,7 +660,7 @@ router.patch(
 
 router.delete(
   '/:id/images/:imageId',
-  canEdit,
+  can('products.view', 'products.photos'),
   asyncHandler(async (req, res) => {
     const imageId = Number(req.params.imageId);
     const img = await prisma.productImage.findUnique({ where: { id: imageId } });

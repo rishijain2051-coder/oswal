@@ -9,8 +9,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
-import { asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
+import { authenticate, can, canAny, may } from '../middleware/auth';
 import { round } from '../lib/costing';
 import { assemble, normalizeKey, outlier, summarize, windowStart, type Occurrence, type SourceStats, type Suggestion } from '../lib/suggest';
 import { CHANGE_ROOTS } from '../lib/changeLog';
@@ -55,6 +55,7 @@ const batchSchema = z.object({
  */
 router.post(
   '/suggest/cost-lines',
+  can('suggestions.view'),
   asyncHandler(async (req, res) => {
     const body = batchSchema.parse(req.body);
     const setting = await appSetting();
@@ -229,6 +230,7 @@ router.post(
  */
 router.get(
   '/suggest/price',
+  can('suggestions.view'),
   asyncHandler(async (req, res) => {
     const q = z
       .object({
@@ -297,6 +299,7 @@ router.get(
 
 router.get(
   '/suggest/rate',
+  can('suggestions.view'),
   asyncHandler(async (req, res) => {
     const q = z
       .object({
@@ -439,8 +442,21 @@ router.get(
  * Suggestions say what a figure has been; this says who moved it and when — the one
  * question the live records cannot answer, because an edit overwrites the old value.
  */
+/**
+ * Which permission a history read needs depends on WHOSE history it is, so the route asks
+ * for any of them and the handler narrows it. `changelog.view` is the superset — it covers
+ * every record type, including the ones that have no History tab of their own.
+ */
+const HISTORY_PERMISSION: Record<string, string> = {
+  Product: 'products.history',
+  Order: 'orders.history',
+  Proforma: 'proformas.view',
+  Worker: 'wages.view',
+};
+
 router.get(
   '/change-log',
+  canAny('changelog.view', 'orders.history', 'products.history', 'proformas.view', 'wages.view'),
   asyncHandler(async (req, res) => {
     const q = z
       .object({
@@ -449,6 +465,13 @@ router.get(
         take: z.coerce.number().int().min(1).max(500).optional(),
       })
       .parse(req.query);
+
+    // A record type with no entry here (a raw item, a statutory component) is only reachable
+    // with the broad permission — the specific ones are the tabs that actually exist.
+    const specific = HISTORY_PERMISSION[q.rootType];
+    if (!may(req, 'changelog.view') && !(specific && may(req, specific))) {
+      throw new ApiError(403, `You do not have permission to see the change history of a ${q.rootType.toLowerCase()}.`);
+    }
 
     res.json(
       await prisma.changeLog.findMany({
@@ -466,6 +489,7 @@ router.get(
 
 router.get(
   '/app-settings',
+  canAny('masters.view', 'money.view', 'settings.app'),
   asyncHandler(async (_req, res) => {
     res.json(await appSetting());
   })
@@ -475,7 +499,7 @@ router.get(
 // so every signed-in user may read them.
 router.put(
   '/app-settings',
-  requireRole('Admin'),
+  can('masters.view', 'settings.app'),
   asyncHandler(async (req, res) => {
     const data = z
       .object({ suggestionWindowDays: z.number().int().min(0).max(3650).optional(), outlierPct: z.number().min(0).max(1000).optional() })

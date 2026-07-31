@@ -18,8 +18,8 @@ const { Text, Paragraph } = Typography;
 export default function WorkforceTab() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canEdit = hasRole('Admin');
+  const { can } = useAuth();
+  const canEdit = can('workforce.settings');
   const { data: settings } = useWorkforceSettings();
   const [form] = Form.useForm();
   const [holiday, setHoliday] = useState<{ date: Dayjs | null; name: string }>({ date: null, name: '' });

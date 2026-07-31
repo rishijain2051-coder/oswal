@@ -2,9 +2,14 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { env } from '../env';
 
+/**
+ * What the token carries. Deliberately NOT the user's permissions or role: those are
+ * resolved from the database on every request (`lib/access.ts`) so that revoking access
+ * takes effect on the next click rather than whenever a twelve-hour token happens to
+ * expire. The token answers "who signed in", nothing more.
+ */
 export interface JwtPayload {
   sub: number;
-  role: string;
   name: string;
   email: string;
 }

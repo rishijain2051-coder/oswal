@@ -82,13 +82,13 @@ function Kpi({
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { user, hasRole } = useAuth();
+  const { user, can } = useAuth();
   const { data: ops } = useOpsDashboard();
   const { data: sales } = useSalesDashboard();
   // Money is Manager+ everywhere else in the app, so it must not appear here either. The
   // fetch is unconditional and the RENDER is gated, matching SalesHome — `/finance/summary`
   // is not itself role-restricted, and a hook that changes shape by role is worse.
-  const canSeeMoney = hasRole('Manager');
+  const canSeeMoney = can('money.view');
   const { data: fin } = useFinanceSummary();
   const { data: delivery } = useQuery<DeliveryStatusResponse>({
     queryKey: ['delivery-status'],

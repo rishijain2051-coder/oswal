@@ -30,8 +30,8 @@ const QUICK: (AttendanceStatus | null)[] = [null, 'ABSENT', 'HALF_DAY', 'LEAVE',
 export default function MusterPage() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canEdit = hasRole('Operator');
+  const { can } = useAuth();
+  const canEdit = can('muster.mark');
 
   const [date, setDate] = useState<Dayjs>(dayjs());
   const [q, setQ] = useState('');

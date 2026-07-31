@@ -47,8 +47,8 @@ export default function WorkerDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canManage = hasRole('Manager');
+  const { can } = useAuth();
+  const canManage = can('workers.manage');
 
   const { data: w, isLoading } = useWorker(id);
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'));

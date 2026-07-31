@@ -78,7 +78,7 @@ export default function PartyStatementPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
 
   const type = (partyType?.toUpperCase() ?? 'BUYER') as PartyType;
   const name = search.get('name') ?? undefined;
@@ -410,7 +410,7 @@ export default function PartyStatementPage() {
                               render: (_, r: any) =>
                                 r.billed ? (
                                   <Tag color="green">billed</Tag>
-                                ) : hasRole('Manager') ? (
+                                ) : can('payments.record') ? (
                                   <Button size="small" loading={billReceipt.isPending} onClick={() => billReceipt.mutate({ id: r.id, value: r.value, item: r.item })}>
                                     Bill {money(r.value, symbol)}
                                   </Button>

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, can, canAny, may } from '../middleware/auth';
 import { nextDocNumber } from '../lib/numbering';
 import { computeCostSheet } from '../lib/productCosting';
 import { loadMethodMap } from '../lib/methods';
@@ -28,8 +28,6 @@ const router = Router();
 // A route param here is always a database id — see guardIdParams.
 guardIdParams(router);
 router.use(authenticate);
-const canEdit = requireRole('Operator');
-const canManage = requireRole('Manager');
 
 // Hand-over photos share the product-image folder, served at /uploads behind auth.
 const uploadPhotos = imageUploader('move-');
@@ -69,6 +67,7 @@ async function productFloorInr(productId: number, market: string | null | undefi
  */
 router.get(
   '/ops/price',
+  canAny('orders.view', 'proformas.view'),
   asyncHandler(async (req, res) => {
     const productId = Number(req.query.productId);
     const currencyId = req.query.currencyId ? Number(req.query.currencyId) : undefined;
@@ -97,6 +96,7 @@ router.get(
 
 router.get(
   '/orders',
+  can('orders.view'),
   asyncHandler(async (req, res) => {
     const status = req.query.status as string | undefined;
     const orders = await prisma.order.findMany({ where: { ...notDeleted, ...(status ? { status } : {}) }, include: orderInclude, orderBy: { orderDate: 'desc' } });
@@ -107,7 +107,7 @@ router.get(
 /** What is in the order trash. Declared before `/orders/:id` so the literal wins. */
 router.get(
   '/orders/trash',
-  canManage,
+  can('orders.view', 'orders.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.order.findMany({
@@ -126,6 +126,7 @@ router.get(
  */
 router.get(
   '/orders/delivery-status',
+  can('orders.view', 'orders.schedule.view'),
   asyncHandler(async (_req, res) => {
     const orders = await prisma.order.findMany({
       where: { ...notDeleted, status: { notIn: ['Cancelled'] } },
@@ -183,6 +184,7 @@ router.get(
 
 router.get(
   '/orders/:id',
+  can('orders.view'),
   asyncHandler(async (req, res) => {
     res.json(await loadSerializedOrder(Number(req.params.id)));
   })
@@ -255,7 +257,7 @@ const orderLineTax = (l: z.output<typeof orderLineSchema>, domestic: boolean) =>
 
 router.post(
   '/orders',
-  canEdit,
+  can('orders.view', 'orders.create'),
   asyncHandler(async (req, res) => {
     const data = orderSchema.parse(req.body);
     if (data.lines.length === 0) throw new ApiError(400, 'An order needs at least one product line.');
@@ -309,15 +311,64 @@ router.post(
 
 router.put(
   '/orders/:id',
-  canEdit,
+  can('orders.view', 'orders.edit'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = orderSchema.parse(req.body);
     if (data.lines.length === 0) throw new ApiError(400, 'An order needs at least one product line.');
 
-    const existing = await prisma.order.findUnique({ where: { id }, select: { number: true, deletedAt: true } });
+    const existing = await prisma.order.findUnique({
+      where: { id },
+      select: {
+        number: true,
+        deletedAt: true,
+        charges: { select: { name: true, kind: true, amount: true, pct: true, gstRatePct: true, isTaxable: true }, orderBy: { sortOrder: 'asc' } },
+        lines: { select: { id: true, unitPrice: true, discountPct: true, discountAmt: true, gstRatePct: true } },
+      },
+    });
     if (!existing) throw new ApiError(404, 'Order not found.');
     if (existing.deletedAt) throw new ApiError(409, `${existing.number} is in the trash. Restore it before editing it.`);
+
+    // Editing an order and RE-PRICING it are separate permissions, so which one this request
+    // needs depends on whether any money moved. A coordinator may fix a quantity or a
+    // delivery date on a confirmed order without being able to change what the buyer owes.
+    //
+    // Compared against what is stored rather than trusted from a flag in the payload: the
+    // client always posts the whole order, so every save would otherwise look like a
+    // re-price. `differs` is not reused here because that helper works on change-log rows.
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.005;
+    const priorLine = new Map(existing.lines.map((l) => [l.id, l]));
+    const linesRepriced = data.lines.some((l) => {
+      // A new line has no prior price, and setting one is pricing.
+      if (!l.id) return l.unitPrice !== 0 || l.discountPct !== 0 || l.discountAmt !== 0;
+      const prev = priorLine.get(l.id);
+      if (!prev) return true;
+      return (
+        !near(prev.unitPrice, l.unitPrice) ||
+        !near(prev.discountPct, l.discountPct) ||
+        !near(prev.discountAmt, l.discountAmt) ||
+        !near(prev.gstRatePct ?? 0, l.gstRatePct ?? 0)
+      );
+    });
+    // Charges are replaced wholesale on save, so any difference in count or content counts.
+    const chargesChanged =
+      data.charges.length !== existing.charges.length ||
+      data.charges.some((c, i) => {
+        const prev = existing.charges[i];
+        return (
+          !prev ||
+          prev.kind !== c.kind ||
+          prev.name !== c.name ||
+          prev.isTaxable !== c.isTaxable ||
+          !near(prev.amount, c.amount) ||
+          !near(prev.pct, c.pct) ||
+          !near(prev.gstRatePct, c.gstRatePct)
+        );
+      });
+
+    if ((linesRepriced || chargesChanged) && !may(req, 'orders.pricing')) {
+      throw new ApiError(403, 'You do not have permission to do this. Changing a price, a discount or a charge needs "Edit order pricing".');
+    }
 
     const putBuyer = await prisma.buyer.findUnique({ where: { id: data.buyerId }, select: { market: true, state: true } });
     if (!putBuyer) throw new ApiError(404, 'Buyer not found.');
@@ -445,7 +496,7 @@ router.put(
  */
 router.patch(
   '/orders/:id/status',
-  canManage,
+  can('orders.view', 'orders.status'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const { status } = z.object({ status: z.enum(['Closed', 'Cancelled'] as const) }).parse(req.body);
@@ -467,7 +518,7 @@ router.patch(
  */
 router.post(
   '/orders/:id/reopen',
-  canManage,
+  can('orders.view', 'orders.reopen'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const order = await prisma.order.findUnique({ where: { id }, select: { status: true, number: true, deletedAt: true } });
@@ -491,7 +542,7 @@ router.post(
 
 router.post(
   '/orders/:id/restore',
-  canManage,
+  can('orders.view', 'orders.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.order.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -505,7 +556,7 @@ router.post(
 /** Destroy for good. Admin only, only from the trash, no waiting period. */
 router.delete(
   '/orders/:id/permanent',
-  requireRole('Admin'),
+  can('orders.view', 'orders.restore', 'orders.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.order.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -534,7 +585,7 @@ router.delete(
  */
 router.delete(
   '/orders/:id',
-  canManage,
+  can('orders.view', 'orders.delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.order.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -572,12 +623,20 @@ const routingSchema = z.object({
 
 router.patch(
   '/order-lines/:id/routing',
-  canEdit,
+  can('orders.view', 'board.view', 'board.routing'),
   asyncHandler(async (req, res) => {
     const lineId = Number(req.params.id);
     const data = routingSchema.parse(req.body);
     const line = await prisma.orderLine.findUnique({ where: { id: lineId }, include: { stages: true } });
     if (!line) throw new ApiError(404, 'Order line not found.');
+
+    // Deciding WHERE a stage is done and deciding WHAT IT PAYS are separate permissions: a
+    // supervisor may send stage 4 to a vendor without also setting the vendor's rate. Which
+    // one a request needs depends on the payload, so it is checked here.
+    const touchesRates = (data.stages ?? []).some((s) => s.jobworkRate !== undefined || s.labourRate !== undefined);
+    if (touchesRates && !may(req, 'board.rates')) {
+      throw new ApiError(403, 'You do not have permission to do this. Changing a jobwork or labour rate needs "Set jobwork and labour rates".');
+    }
 
     if (data.stageLineId != null) {
       const sl = await prisma.stageLine.findUnique({ where: { id: data.stageLineId }, include: { _count: { select: { steps: true } } } });
@@ -666,6 +725,7 @@ router.patch(
 /** The schedule for one order, with the live board comparison attached per line. */
 router.get(
   '/orders/:id/schedule',
+  can('orders.view', 'orders.schedule.view'),
   asyncHandler(async (req, res) => {
     const o = await loadSerializedOrder(Number(req.params.id));
     res.json({
@@ -709,7 +769,7 @@ const scheduleSchema = z.object({
 /** Create or replace the schedule for an order's lines. */
 router.put(
   '/orders/:id/schedule',
-  canEdit,
+  can('orders.view', 'orders.schedule.view', 'orders.schedule.edit'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const data = scheduleSchema.parse(req.body);
@@ -764,7 +824,7 @@ router.put(
  */
 router.post(
   '/orders/:id/auto-schedule',
-  canEdit,
+  can('orders.view', 'orders.schedule.view', 'orders.schedule.edit'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const body = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() }).parse(req.body ?? {});
@@ -816,6 +876,7 @@ router.post(
  */
 router.get(
   '/orders/:id/pdf',
+  can('orders.view', 'orders.documents'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const [o, co] = await Promise.all([loadSerializedOrder(id), ensureCompany()]);
@@ -861,6 +922,7 @@ const uploadAttachments = attachmentUploader('order-');
 
 router.get(
   '/orders/:id/attachments',
+  can('orders.view', 'orders.attachments.view'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const order = await prisma.order.findUnique({ where: { id: orderId }, select: { id: true } });
@@ -876,7 +938,7 @@ router.get(
  */
 router.post(
   '/orders/:id/attachments',
-  canEdit,
+  can('orders.view', 'orders.attachments.view', 'orders.attachments.manage'),
   uploadAttachments.array('files', 10),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
@@ -938,6 +1000,7 @@ router.post(
  */
 router.get(
   '/orders/:id/attachments/:attachmentId',
+  can('orders.view', 'orders.attachments.view'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const id = Number(req.params.attachmentId);
@@ -956,7 +1019,7 @@ router.get(
 /** Rename or re-label an attachment without re-uploading it. */
 router.patch(
   '/orders/:id/attachments/:attachmentId',
-  canEdit,
+  can('orders.view', 'orders.attachments.view', 'orders.attachments.manage'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const id = Number(req.params.attachmentId);
@@ -974,7 +1037,7 @@ router.patch(
  */
 router.delete(
   '/orders/:id/attachments/:attachmentId',
-  canManage,
+  can('orders.view', 'orders.attachments.view', 'orders.attachments.manage'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const id = Number(req.params.attachmentId);
@@ -1023,12 +1086,26 @@ const movesBodySchema = z.object({
  */
 router.post(
   '/orders/:id/moves',
-  canEdit,
+  can('orders.view', 'board.view', 'board.move'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const body = movesBodySchema.parse(req.body);
     const date = body.date ? new Date(body.date) : new Date();
     const comment = body.comment?.trim() || null;
+
+    // Two things in a submission need more than `board.move`, and which they are depends on
+    // the payload rather than the route — so they are checked here rather than as middleware.
+    //
+    // A REJECT is a quality judgement that also earns money a second time when the work is
+    // redone, and naming workers is what creates piece-rate wages. Both are held separately
+    // from moving pieces forward, so a shop-floor login can record progress without being
+    // able to fail a batch or to decide who gets paid for it.
+    if (body.moves.some((m) => m.kind === 'REJECT') && !may(req, 'board.reject')) {
+      throw new ApiError(403, 'You do not have permission to do this. Sending pieces back for rework needs "Send pieces back for rework".');
+    }
+    if (body.moves.some((m) => m.workers?.length) && !may(req, 'board.workers')) {
+      throw new ApiError(403, 'You do not have permission to do this. Naming the workers who did the work needs "Name who did the work".');
+    }
 
     // The board is read, validated and written inside ONE transaction, and the order is
     // LOCKED before any of it. Doing the check outside left a window where two
@@ -1136,7 +1213,7 @@ router.post(
 
 router.post(
   '/moves/:id/photos',
-  canEdit,
+  can('orders.view', 'board.view', 'board.photos'),
   uploadPhotos.array('photos', 10),
   asyncHandler(async (req, res) => {
     const moveId = Number(req.params.id);
@@ -1156,7 +1233,7 @@ router.post(
 
 router.delete(
   '/moves/:moveId/photos/:photoId',
-  canEdit,
+  can('orders.view', 'board.view', 'board.photos'),
   asyncHandler(async (req, res) => {
     // Scoped to the move in the path, so one movement's id cannot be used to delete
     // another's photo.
@@ -1171,7 +1248,7 @@ router.delete(
 /** Edit the hand-over comment after the fact. */
 router.patch(
   '/moves/:id',
-  canEdit,
+  can('orders.view', 'board.view', 'board.move'),
   asyncHandler(async (req, res) => {
     const { note } = z.object({ note: z.string().nullable() }).parse(req.body);
     const move = await prisma.stageMove.findUnique({ where: { id: Number(req.params.id) }, include: { orderLine: { select: { orderId: true } } } });
@@ -1184,7 +1261,7 @@ router.patch(
 /** Undo the most recent movement on a line — anything older must be undone first. */
 router.delete(
   '/moves/:id',
-  canEdit,
+  can('orders.view', 'board.view', 'board.undo'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const move = await prisma.stageMove.findUnique({ where: { id }, include: { orderLine: { select: { id: true, orderId: true } } } });
@@ -1292,6 +1369,7 @@ async function serializedProforma(id: number) {
 
 router.get(
   '/proformas',
+  can('proformas.view'),
   asyncHandler(async (req, res) => {
     const status = req.query.status as string | undefined;
     const [list, ourState] = await Promise.all([
@@ -1304,7 +1382,7 @@ router.get(
 
 router.get(
   '/proformas/trash',
-  canManage,
+  can('proformas.view', 'proformas.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.proforma.findMany({
@@ -1318,6 +1396,7 @@ router.get(
 
 router.get(
   '/proformas/:id',
+  can('proformas.view'),
   asyncHandler(async (req, res) => {
     res.json(await serializedProforma(Number(req.params.id)));
   })
@@ -1421,7 +1500,7 @@ function proformaData(d: z.infer<typeof proformaSchema>, currencyRate: number | 
 
 router.post(
   '/proformas',
-  canEdit,
+  can('proformas.view', 'proformas.create'),
   asyncHandler(async (req, res) => {
     const data = proformaSchema.parse(req.body);
     if (data.lines.length === 0) throw new ApiError(400, 'A proforma needs at least one line.');
@@ -1455,7 +1534,7 @@ router.post(
 
 router.put(
   '/proformas/:id',
-  canEdit,
+  can('proformas.view', 'proformas.edit'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = proformaSchema.parse(req.body);
@@ -1527,7 +1606,7 @@ router.put(
 /** Mark as sent. Accepting is a separate, order-creating step. */
 router.post(
   '/proformas/:id/send',
-  canEdit,
+  can('proformas.view', 'proformas.send'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const p = await loadProforma(id, true);
@@ -1541,7 +1620,7 @@ router.post(
 /** Back to draft, e.g. to fix a price before re-sending. */
 router.post(
   '/proformas/:id/reopen',
-  canEdit,
+  can('proformas.view', 'proformas.reopen'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const p = await loadProforma(id, true);
@@ -1555,7 +1634,7 @@ router.post(
 /** Rejected — record it and stop. Nothing downstream happens. */
 router.post(
   '/proformas/:id/reject',
-  canEdit,
+  can('proformas.view', 'proformas.reject'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const reason = z.object({ reason: z.string().nullable().optional() }).parse(req.body ?? {}).reason ?? null;
@@ -1573,7 +1652,7 @@ router.post(
  */
 router.post(
   '/proformas/:id/accept',
-  canEdit,
+  can('proformas.view', 'proformas.accept'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const body = z.object({ deliveryDate: z.string().datetime().nullable().optional() }).parse(req.body ?? {});
@@ -1671,7 +1750,7 @@ router.post(
 
 router.post(
   '/proformas/:id/restore',
-  canManage,
+  can('proformas.view', 'proformas.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.proforma.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -1684,7 +1763,7 @@ router.post(
 
 router.delete(
   '/proformas/:id/permanent',
-  requireRole('Admin'),
+  can('proformas.view', 'proformas.restore', 'proformas.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const p = await prisma.proforma.findUnique({ where: { id }, include: { order: { select: { number: true } } } });
@@ -1702,7 +1781,7 @@ router.delete(
  */
 router.delete(
   '/proformas/:id',
-  canManage,
+  can('proformas.view', 'proformas.delete'),
   asyncHandler(async (req, res) => {
     const p = await prisma.proforma.findUnique({ where: { id: Number(req.params.id) }, include: { order: { select: { number: true, deletedAt: true } } } });
     if (!p) throw new ApiError(404, 'Proforma not found.');
@@ -1758,6 +1837,7 @@ function pdfInputFor(s: ReturnType<typeof serializeProforma>, co: CompanyProfile
 
 router.get(
   '/proformas/:id/pdf',
+  can('proformas.view', 'proformas.documents'),
   asyncHandler(async (req, res) => {
     const s = await serializedProforma(Number(req.params.id));
     const pdf = await proformaPdf(pdfInputFor(s, await ensureCompany()));
@@ -1789,6 +1869,7 @@ function mailInputFor(s: ReturnType<typeof serializeProforma>, co: CompanyProfil
 /** Everything the UI needs to offer both send routes. */
 router.get(
   '/proformas/:id/mail',
+  can('proformas.view', 'proformas.documents', 'proformas.email'),
   asyncHandler(async (req, res) => {
     const s = await serializedProforma(Number(req.params.id));
     const me = await prisma.user.findUnique({ where: { id: req.user!.sub }, select: { name: true } });
@@ -1813,6 +1894,7 @@ router.get(
 /** A ready-to-send draft (To/Subject/Body + the PI PDF attached) as an .eml file. */
 router.get(
   '/proformas/:id/email.eml',
+  can('proformas.view', 'proformas.documents', 'proformas.email'),
   asyncHandler(async (req, res) => {
     const s = await serializedProforma(Number(req.params.id));
     const me = await prisma.user.findUnique({ where: { id: req.user!.sub }, select: { name: true } });

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, can, canAny } from '../middleware/auth';
 import { round } from '../lib/costing';
 import { like } from '../lib/search';
 import { trashedNote } from '../lib/references';
@@ -11,7 +11,6 @@ const router = Router();
 // A route param here is always a database id — see guardIdParams.
 guardIdParams(router);
 router.use(authenticate);
-const canEdit = requireRole('Operator');
 
 // ---------------------------------------------------------------------------
 // Suppliers (material + jobwork vendors)
@@ -19,6 +18,7 @@ const canEdit = requireRole('Operator');
 
 router.get(
   '/suppliers',
+  canAny('suppliers.view', 'board.routing'),
   asyncHandler(async (req, res) => {
     const q = (req.query.q as string | undefined)?.trim();
     const type = req.query.type as string | undefined;
@@ -44,7 +44,7 @@ const supplierSchema = z.object({
 
 router.post(
   '/suppliers',
-  canEdit,
+  can('suppliers.view', 'suppliers.manage'),
   asyncHandler(async (req, res) => {
     const data = supplierSchema.parse(req.body);
     res.status(201).json(await prisma.supplier.create({ data: { ...data, code: data.code.toUpperCase() } }));
@@ -53,7 +53,7 @@ router.post(
 
 router.patch(
   '/suppliers/:id',
-  canEdit,
+  can('suppliers.view', 'suppliers.manage'),
   asyncHandler(async (req, res) => {
     const data = supplierSchema.partial().parse(req.body);
     res.json(await prisma.supplier.update({ where: { id: Number(req.params.id) }, data: { ...data, ...(data.code ? { code: data.code.toUpperCase() } : {}) } }));
@@ -67,7 +67,7 @@ router.patch(
  */
 router.delete(
   '/suppliers/:id',
-  requireRole('Manager'),
+  can('suppliers.view', 'suppliers.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const supplier = await prisma.supplier.findUnique({ where: { id } });
@@ -115,6 +115,7 @@ function decorateRawItem<T extends { id: number; openingQty: number; reorderLeve
 
 router.get(
   '/raw-items',
+  canAny('rawitems.view', 'stock.view', 'sheets.view'),
   asyncHandler(async (_req, res) => {
     const [items, bal] = await Promise.all([prisma.rawItem.findMany({ orderBy: { name: 'asc' } }), balances()]);
     res.json(items.map((it) => decorateRawItem(it, bal)));
@@ -133,7 +134,7 @@ const rawItemSchema = z.object({
 
 router.post(
   '/raw-items',
-  canEdit,
+  can('rawitems.view', 'rawitems.manage'),
   asyncHandler(async (req, res) => {
     const data = rawItemSchema.parse(req.body);
     const created = await prisma.rawItem.create({ data: { ...data, code: data.code.toUpperCase() } });
@@ -143,7 +144,7 @@ router.post(
 
 router.patch(
   '/raw-items/:id',
-  canEdit,
+  can('rawitems.view', 'rawitems.manage'),
   asyncHandler(async (req, res) => {
     const data = rawItemSchema.partial().parse(req.body);
     const updated = await prisma.rawItem.update({ where: { id: Number(req.params.id) }, data: { ...data, ...(data.code ? { code: data.code.toUpperCase() } : {}) } });
@@ -154,7 +155,7 @@ router.patch(
 /** Refused once it has movements — deleting would cascade the stock history away. */
 router.delete(
   '/raw-items/:id',
-  requireRole('Manager'),
+  can('rawitems.view', 'rawitems.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const item = await prisma.rawItem.findUnique({ where: { id } });
@@ -172,6 +173,7 @@ router.delete(
 
 router.get(
   '/stock/txns',
+  can('stock.view'),
   asyncHandler(async (req, res) => {
     const rawItemId = req.query.rawItemId ? Number(req.query.rawItemId) : undefined;
     res.json(
@@ -198,7 +200,7 @@ const stockTxnSchema = z.object({
 
 router.post(
   '/stock/txns',
-  canEdit,
+  can('stock.view', 'stock.manage'),
   asyncHandler(async (req, res) => {
     const data = stockTxnSchema.parse(req.body);
 
@@ -237,7 +239,7 @@ router.post(
 
 router.delete(
   '/stock/txns/:id',
-  canEdit,
+  can('stock.view', 'stock.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const txn = await prisma.stockTxn.findUnique({ where: { id }, include: { bill: { select: { id: true, ref: true } }, rawItem: { select: { name: true, unit: true } } } });

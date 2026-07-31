@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { env } from '../env';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
 import { hashPassword, signToken, verifyPassword } from '../lib/auth';
+import { resolveAccess } from '../lib/access';
 import { authenticate, SESSION_COOKIE } from '../middleware/auth';
 
 const router = Router();
@@ -47,8 +48,8 @@ setInterval(() => {
 }, ATTEMPT_WINDOW_MS).unref();
 
 /** Issue the token and mirror it into an httpOnly cookie for /uploads. */
-function grant(res: Response, user: { id: number; name: string; email: string; role: string }) {
-  const token = signToken({ sub: user.id, role: user.role, name: user.name, email: user.email });
+function grant(res: Response, user: { id: number; name: string; email: string }) {
+  const token = signToken({ sub: user.id, name: user.name, email: user.email });
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
@@ -57,6 +58,27 @@ function grant(res: Response, user: { id: number; name: string; email: string; r
     path: '/',
   });
   return token;
+}
+
+/**
+ * What the client is told about itself. The permission LIST is sent so the UI can hide what
+ * a user cannot do — but it is only ever a hint: every route checks for itself, because a
+ * list sent to a browser is a list the browser can edit.
+ *
+ * Resolved through `resolveAccess` rather than read off the user row, so the token endpoint
+ * and the permission checks can never disagree about what somebody holds.
+ */
+async function identity(userId: number) {
+  const access = await resolveAccess(userId);
+  if (!access) throw new ApiError(401, 'Account not found or disabled.');
+  return {
+    id: access.userId,
+    name: access.name,
+    email: access.email,
+    isOwner: access.isOwner,
+    role: access.roleId ? { id: access.roleId, name: access.roleName } : null,
+    permissions: [...access.keys].sort(),
+  };
 }
 
 router.post(
@@ -73,7 +95,7 @@ router.post(
 
     clearThrottle(key);
     const token = grant(res, user);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+    res.json({ token, user: await identity(user.id) });
   })
 );
 
@@ -81,9 +103,7 @@ router.get(
   '/me',
   authenticate,
   asyncHandler(async (req, res) => {
-    const user = await prisma.user.findUnique({ where: { id: req.user!.sub } });
-    if (!user || !user.isActive) throw new ApiError(401, 'Account not found or disabled.');
-    res.json({ id: user.id, name: user.name, email: user.email, role: user.role });
+    res.json(await identity(req.access!.userId));
   })
 );
 
@@ -99,7 +119,7 @@ router.post(
     const user = await prisma.user.findUnique({ where: { id: req.user!.sub } });
     if (!user || !user.isActive) throw new ApiError(401, 'Account not found or disabled.');
     const token = grant(res, user);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+    res.json({ token, user: await identity(user.id) });
   })
 );
 

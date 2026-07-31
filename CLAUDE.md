@@ -65,8 +65,9 @@ into it from elsewhere. Adding a sub-section means adding its URL segment to
   Run with `tsx` in dev. See *The database* below — it lives inside the repo.
 - **client**: React + Vite + TypeScript + Ant Design. Data via `@tanstack/react-query`
   + axios (`client/src/api/`). Vite proxies `/api` and `/uploads` to `:689`.
-- **Auth**: JWT bearer token in `localStorage`, roles Admin > Manager > Operator > Viewer
-  (`server/src/middleware/auth.ts`, `client/src/auth/AuthContext.tsx`).
+- **Auth**: JWT bearer token in `localStorage`; permissions are **user-defined roles**, not
+  ranks (`server/src/middleware/auth.ts`, `client/src/auth/AuthContext.tsx`). See
+  *Permissions* below.
 
 ## The database — Postgres, inside the repo
 
@@ -325,8 +326,9 @@ closed. Do not add a payroll-period model; it would be wrong on day one.
 - **Dates are calendar facts.** Always go through `dayStart` / `dayKey` / `monthKey`.
   `toISOString().slice(0,10)` on a local midnight names the day BEFORE east of UTC and
   would shift a whole muster or statutory period; `verify.ts` guards this.
-- RBAC: Operator marks the muster, Manager+ for workers, rates, money and postings.
-  Identity and bank fields are redacted below Manager (`redact()` in the routes).
+- RBAC: `muster.mark` for the muster, `workers.manage` / `workers.rates` / `wages.view` /
+  `statutory.post` for the rest. Identity and bank fields need `workers.pii` (`redact()` in
+  the routes) and the money block needs `wages.view` — both withheld server-side.
 
 ## Finished goods — a ledger, not a count
 
@@ -572,7 +574,8 @@ page. Two rules keep it safe:
   already have `isActive`, which does the same job. A second mechanism would mean two ways
   to hide one row.
 
-A permanent delete exists, is **Admin-only**, works only from the trash, and has **no
+A permanent delete exists, needs the record type's own **`*.purge`** permission, works only
+from the trash, and has **no
 waiting period and no automatic purge** — nothing disappears because time passed. The
 product "in use" check is now ADVISORY on soft delete (the orders referencing it are
 unaffected) and BLOCKING on permanent delete, where the foreign keys really bite.
@@ -653,6 +656,80 @@ the reason and stops. `POST .../reopen` puts it back to Draft to revise and re-s
 - Downloads go through axios as a blob (`fetchDocument` in `client/src/api/ops.ts`) so
   the bearer token is sent; server errors arrive as a Blob and are unwrapped there.
 
+## Permissions — the catalogue is code, the roles are data
+
+There are **no built-in roles and no ranks.** The four-rank ladder (Admin > Manager >
+Operator > Viewer) is gone: `User.role` the string is gone, `requireRole` is gone, and
+`hasRole` is gone from the client. A role is a row somebody created, holding a set of
+permission keys, and an account with **no role holds nothing at all** — a new login can sign
+in and see an empty app until it is granted something. That is the intended default.
+
+**`server/src/lib/permissions.ts` is the single authority for which permissions exist**, and
+it is CODE rather than a table for one reason: a permission is only real if a route enforces
+it. Were the catalogue data, an Admin could invent `orders.approve` in the picker, tick it,
+and be told they had granted something that guards nothing. So `verify.ts` asserts **both
+directions** — every catalogue key is referenced by at least one route (no *orphans*), and no
+route asks for a key the catalogue lacks (no *ghosts*, which would be permanently unreachable).
+120 permissions across 13 modules at the time of writing.
+
+- **The prose is part of the contract.** Each entry carries `what`, `allows`, `blocks` and a
+  `risk`, and the Roles screen renders all of it beside the checkbox — because the person
+  granting a permission is not the person who wrote the route, and `board.workers` tells them
+  nothing. `blocks` does the real work: it names the near-miss a granter would otherwise
+  assume came with it ("naming who did the work" does *not* set the rate they are paid).
+  `verify.ts` fails a permission with an empty `allows` or `blocks`.
+- **`requires` is applied when a role is SAVED, never when a permission is checked.** Ticking
+  `orders.purge` stores `orders.restore` and `orders.view` too (`withRequired`, walked
+  transitively and asserted idempotent). Routes still state **every** key they need: leaning
+  on `requires` at check time would make enforcement depend on the shape of this file rather
+  than on what the route does.
+- **Permissions are resolved from the database on EVERY request** (`server/src/lib/access.ts`),
+  never read out of the token. A token lives twelve hours and renews itself quietly, so a role
+  baked into it would mean revoking access did nothing until the next working day. Resolution
+  is cached for 10 s with **explicit invalidation** on every role and user write — the TTL is
+  only a backstop for a change made straight in the database. This also closed a hole the old
+  model had: a **deactivated account's token kept working** until it expired, because nothing
+  looked the user up again.
+- **`can(...)` requires every listed key; `canAny(...)` at least one.** `may(req, key)` is the
+  in-handler form, for when a permission changes WHAT IS RETURNED rather than whether the call
+  is allowed — worker identity (`workers.pii`), worker money (`wages.view`), product costing
+  (`products.costing.view`). That stripping happens server-side; filtering in the client would
+  still put the data on the wire.
+- **Some permissions depend on the PAYLOAD, not the route**, so they are checked in the handler
+  and cannot be middleware: `board.reject` and `board.workers` on `POST /orders/:id/moves`,
+  `board.rates` on the routing patch, `orders.pricing` on `PUT /orders/:id` (compared against
+  what is stored, because the client always posts the whole order), `products.costing.edit`
+  when a save carries a cost sheet, and `workers.rates` when a save carries a rate or a pay
+  type. Splitting these is the point: a coordinator may fix a quantity without re-pricing the
+  job, and a supervisor may send a stage to a vendor without setting what the vendor is paid.
+- **`User.isOwner` is the key under the mat.** An owner holds every permission and sits
+  outside the role system entirely. It exists because permissions are live: without it, a role
+  that lost `roles.manage` would be unrecoverable without database surgery. Three guards keep
+  it honest — the **last active owner** cannot be demoted, deactivated or deleted; owner status
+  is granted only **by an owner** (`requireOwner`, not `users.manage`, or anyone who could edit
+  users could escalate themselves); and a non-owner cannot remove `roles.manage` from **their
+  own** role or deactivate it.
+- A role somebody still holds cannot be deleted — the count is reported, following the
+  convention the other delete routes use. An **inactive role grants nothing**, which is how a
+  role is retired without silently leaving its holders with what it used to carry.
+- **Roles are configuration, so they survive a wipe** exactly as logins do. They are
+  deliberately NOT in `wipeOperational()` — see the note there, since the rule in that file
+  says to add every new model.
+- Reference lists (currencies, units, attributes, stage routes, cost formulas, container
+  types, the company record) sit behind `canReference` in `masters.routes.ts` — `canAny` of the
+  module views that consume them — because every form in the app reads one, and gating them on
+  `masters.view` alone would make an order-entry role need a master-data permission it has no
+  other use for.
+- `client/src/App.tsx` gates routes with `<Needs>` / `<NeedsAny>` so a stale link says which
+  permission is missing instead of rendering an empty page that fails a dozen requests. It had
+  no checks at all before. This is a courtesy; the server refuses regardless.
+- `npx tsx server/scripts/dumpPermissions.ts > PERMISSIONS.md` prints the catalogue as
+  Markdown, for whoever grants permissions rather than whoever wrote them.
+
+`server/scripts/migrateRoles.ts` carried the old ranks across and is a **run-once** script
+that must run BEFORE the schema change, because `prisma db push` drops `User.role` with the
+data in it. It promoted every active Admin to owner and left everybody else with no role.
+
 ## Security invariants
 
 Undoing any of these reopens a hole that was closed deliberately:
@@ -660,6 +737,10 @@ Undoing any of these reopens a hole that was closed deliberately:
 - `env.ts` **throws** on a missing/placeholder `JWT_SECRET` in production and generates
   a random one in dev. Never reintroduce a hardcoded fallback.
 - CORS is an allowlist from `CORS_ORIGINS`; `cors()` with no options is wide open.
+- **Every route states a permission.** The `/finance/*` reads once sat behind `authenticate`
+  alone, so any login — a Viewer included — could pull every buyer balance, every payable and
+  any party statement over the API while the client politely hid it. `verify.ts` now asserts
+  each of those six is behind a `money.*` key by name.
 - `/uploads` sits behind `authenticateUpload`, which accepts the bearer header **or**
   the httpOnly `oswal_session` cookie that login sets — an `<img>` tag cannot send
   a header. The client's axios instance uses `withCredentials`. Files go out with
@@ -679,9 +760,10 @@ Undoing any of these reopens a hole that was closed deliberately:
   in the browser. A download is scoped to the order in its path.
 - The company logo goes through the same image pipeline as product photos, and the
   previous file is unlinked on replace rather than orphaned.
-- **Permanent delete is Admin-only** and only reachable from the trash. Soft delete is
-  Manager+.
-- **Worker identity and bank details are withheld below Manager** (`redact()` in
+- **Permanent delete needs `<record>.purge`** and is only reachable from the trash; soft
+  delete needs `<record>.delete`. `TrashDrawer` maps its endpoint to the purge key, so a new
+  trashable model shows no permanent-delete button until it is added there deliberately.
+- **Worker identity and bank details need `workers.pii`** (`redact()` in
   `manforce.routes.ts`). Filtering them in the client only would still ship them over
   the wire to anyone with an Operator login.
 - `round()` nudges the magnitude, not the signed value, so negatives round
@@ -763,11 +845,14 @@ reconciling to the paisa, and an export staying untaxed), the scheduling engine
 (auto-scheduling from stage durations, plan-versus-board status, the delivery verdict), the
 currency grouping behind the forex position, and the rule that soft delete stays OUT of the
 pure functions, and the receivable basis (the ORDER default unchanged, an invoice spanning
-orders staying one debt, the attribution reconciling to the paisa, a draft not yet a debt).
+orders staying one debt, the attribution reconciling to the paisa, a draft not yet a debt), and
+the permission catalogue (no orphan keys, no ghost keys, the prose present on every entry, the
+`requires` graph acyclic and its closure idempotent and transitive, and the finance reads
+guarded by name).
 It needs no database, so it survives any wipe — **this is now the authority
 for the costing formulas**, not a seeded product. Add a case here whenever you touch
 `costing.ts`, `production.ts`, `finance.ts`, `workforce.ts`, `suggest.ts`, `pricing.ts`,
-`scheduling.ts`, `shipping.ts` or `finished.ts`.
+`scheduling.ts`, `shipping.ts`, `finished.ts` or `permissions.ts`.
 
 It also holds the **client-mirror identity checks** as a table of pairs (`pricing`,
 `shipping`). Add a pair there whenever you add a mirrored engine, or nothing stops it

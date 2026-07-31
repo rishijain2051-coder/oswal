@@ -18,8 +18,8 @@ const { Title, Text } = Typography;
  */
 export default function WorkersPage() {
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
-  const canManage = hasRole('Manager');
+  const { can } = useAuth();
+  const canManage = can('workers.manage');
 
   const [q, setQ] = useState('');
   const [scope, setScope] = useState<'active' | 'all'>('active');

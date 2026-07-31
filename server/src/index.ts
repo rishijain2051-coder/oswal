@@ -8,6 +8,7 @@ import { authenticate, authenticateUpload } from './middleware/auth';
 import authRoutes from './routes/auth.routes';
 import metaRoutes from './routes/meta.routes';
 import usersRoutes from './routes/users.routes';
+import rolesRoutes from './routes/roles.routes';
 import mastersRoutes from './routes/masters.routes';
 import productsRoutes from './routes/products.routes';
 import opsSuppliersRoutes from './routes/ops.suppliers.routes';
@@ -76,6 +77,7 @@ app.use(
 app.use('/api/auth', authRoutes);
 app.use('/api/meta', authenticate, metaRoutes);
 app.use('/api/users', authenticate, usersRoutes);
+app.use('/api/roles', authenticate, rolesRoutes);
 app.use('/api', authenticate, mastersRoutes);
 app.use('/api/products', authenticate, productsRoutes);
 app.use('/api', authenticate, opsSuppliersRoutes);

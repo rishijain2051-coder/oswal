@@ -15,8 +15,8 @@ const FILTERS = ['To pack', 'Packed', 'All'] as const;
 
 export default function PackingPage() {
   const qc = useQueryClient();
-  const { hasRole } = useAuth();
-  const canPack = hasRole('Operator');
+  const { can } = useAuth();
+  const canPack = can('packing.manage');
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('To pack');
   const [drawer, setDrawer] = useState<PackQueueRow[] | null>(null);
 

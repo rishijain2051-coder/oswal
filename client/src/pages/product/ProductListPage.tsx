@@ -16,7 +16,7 @@ const { Title, Text } = Typography;
 
 export default function ProductListPage() {
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [trashOpen, setTrashOpen] = useState(false);
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -98,12 +98,12 @@ export default function ProductListPage() {
           <Tooltip title="Open this product">
             <Button size="small" aria-label="Open this product" icon={<EyeOutlined />} onClick={() => navigate(`/products/${r.id}`)} />
           </Tooltip>
-          {hasRole('Operator') && (
+          {can('products.edit') && (
             <Tooltip title="Edit this product">
               <Button size="small" aria-label="Edit this product" icon={<EditOutlined />} onClick={() => navigate(`/products/${r.id}/edit`)} />
             </Tooltip>
           )}
-          {hasRole('Manager') && (
+          {can('products.delete') && (
             <Popconfirm title="Delete this product?" onConfirm={() => del.mutate(r.id)} okText="Delete" okButtonProps={{ danger: true }}>
               <Tooltip title="Move to trash">
                 <Button size="small" danger aria-label="Move this product to the trash" icon={<DeleteOutlined />} />
@@ -130,8 +130,8 @@ export default function ProductListPage() {
           Product Details
         </Title>
         <Space>
-          {hasRole('Manager') && <TrashButton endpoint="/products" onClick={() => setTrashOpen(true)} />}
-          {hasRole('Operator') && (
+          {can('products.restore') && <TrashButton endpoint="/products" onClick={() => setTrashOpen(true)} />}
+          {can('products.create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/products/new')}>
               Create Product
             </Button>

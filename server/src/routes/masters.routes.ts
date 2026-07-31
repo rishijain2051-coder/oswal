@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, can, canAny } from '../middleware/auth';
 import { ALLOWED_VARS } from '../lib/costing';
 import { validateExpr } from '../lib/expr';
 import { CHANNELS, MARKETS } from '../lib/pricing';
@@ -18,8 +18,14 @@ const router = Router();
 guardIdParams(router);
 router.use(authenticate);
 
-// Managers+ may edit master data; everyone may read.
-const canEdit = requireRole('Manager');
+/**
+ * Reference lists — currencies, units, attributes, stage routes, cost formulas, container
+ * types and the company record. Every form in the app reads at least one of them, so gating
+ * them behind `masters.view` alone would mean an order-entry role needed a master-data
+ * permission it has no other use for. Anyone who can see a module that consumes them may
+ * read them; a login holding no view permission at all still gets nothing.
+ */
+const canReference = canAny('masters.view', 'orders.view', 'proformas.view', 'products.view', 'sheets.view');
 
 // ---------------------------------------------------------------------------
 // Currencies
@@ -27,6 +33,7 @@ const canEdit = requireRole('Manager');
 
 router.get(
   '/currencies',
+  canReference,
   asyncHandler(async (_req, res) => {
     res.json(await prisma.currency.findMany({ orderBy: [{ isBase: 'desc' }, { code: 'asc' }] }));
   })
@@ -43,7 +50,7 @@ const currencySchema = z.object({
 
 router.post(
   '/currencies',
-  canEdit,
+  can('masters.view', 'currencies.manage'),
   asyncHandler(async (req, res) => {
     const data = currencySchema.parse(req.body);
     const created = await prisma.$transaction(async (tx) => {
@@ -58,7 +65,7 @@ router.post(
 
 router.patch(
   '/currencies/:id',
-  canEdit,
+  can('masters.view', 'currencies.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = currencySchema.partial().parse(req.body);
@@ -75,7 +82,7 @@ router.patch(
 
 router.delete(
   '/currencies/:id',
-  canEdit,
+  can('masters.view', 'currencies.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const cur = await prisma.currency.findUnique({ where: { id } });
@@ -105,7 +112,7 @@ const bulkRatesSchema = z.object({
 
 router.post(
   '/currencies/bulk-rates',
-  canEdit,
+  can('masters.view', 'currencies.manage', 'currencies.rates.import'),
   asyncHandler(async (req, res) => {
     const { rates } = bulkRatesSchema.parse(req.body);
     let updated = 0;
@@ -130,6 +137,7 @@ router.post(
 
 router.get(
   '/units',
+  canReference,
   asyncHandler(async (_req, res) => {
     res.json(await prisma.unit.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }));
   })
@@ -144,7 +152,7 @@ const unitSchema = z.object({
 
 router.post(
   '/units',
-  canEdit,
+  can('masters.view', 'units.manage'),
   asyncHandler(async (req, res) => {
     const data = unitSchema.parse(req.body);
     res.status(201).json(await prisma.unit.create({ data: { ...data, code: data.code.toUpperCase() } }));
@@ -153,7 +161,7 @@ router.post(
 
 router.patch(
   '/units/:id',
-  canEdit,
+  can('masters.view', 'units.manage'),
   asyncHandler(async (req, res) => {
     const data = unitSchema.partial().parse(req.body);
     res.json(
@@ -167,7 +175,7 @@ router.patch(
 
 router.delete(
   '/units/:id',
-  canEdit,
+  can('masters.view', 'units.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const inUse = await prisma.product.count({ where: { unitId: id } });
@@ -188,6 +196,7 @@ router.delete(
  */
 router.get(
   '/company',
+  canReference,
   asyncHandler(async (_req, res) => {
     res.json(await ensureCompany());
   })
@@ -218,7 +227,7 @@ const companySchema = z.object({
 
 router.put(
   '/company',
-  requireRole('Admin'),
+  can('masters.view', 'company.manage'),
   asyncHandler(async (req, res) => {
     const data = companySchema.parse(req.body);
     await ensureCompany();
@@ -261,7 +270,7 @@ const uploadLogo = imageUploader('company-logo-');
 
 router.post(
   '/company/logo',
-  requireRole('Admin'),
+  can('masters.view', 'company.manage'),
   uploadLogo.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new ApiError(400, 'No file was uploaded.');
@@ -278,7 +287,7 @@ router.post(
 
 router.delete(
   '/company/logo',
-  requireRole('Admin'),
+  can('masters.view', 'company.manage'),
   asyncHandler(async (_req, res) => {
     const current = await ensureCompany();
     if (!current.logoFilename) throw new ApiError(404, 'There is no logo to remove.');
@@ -297,6 +306,7 @@ router.delete(
 
 router.get(
   '/container-types',
+  canReference,
   asyncHandler(async (req, res) => {
     const activeOnly = String(req.query.activeOnly ?? '') === '1';
     res.json(
@@ -323,7 +333,7 @@ const containerTypeSchema = z.object({
 
 router.post(
   '/container-types',
-  requireRole('Manager'),
+  can('masters.view', 'containertypes.manage'),
   asyncHandler(async (req, res) => {
     const data = containerTypeSchema.parse(req.body);
     res.status(201).json(await prisma.containerType.create({ data: { ...data, code: data.code.toUpperCase() } }));
@@ -332,7 +342,7 @@ router.post(
 
 router.put(
   '/container-types/:id',
-  requireRole('Manager'),
+  can('masters.view', 'containertypes.manage'),
   asyncHandler(async (req, res) => {
     const data = containerTypeSchema.partial().parse(req.body);
     res.json(
@@ -347,7 +357,7 @@ router.put(
 /** Report what references it rather than letting a foreign key surface as a 500. */
 router.delete(
   '/container-types/:id',
-  requireRole('Admin'),
+  can('masters.view', 'containertypes.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.containerType.findUnique({ where: { id } });
@@ -367,6 +377,7 @@ router.delete(
 
 router.get(
   '/buyers',
+  canAny('buyers.view', 'orders.view', 'proformas.view'),
   asyncHandler(async (req, res) => {
     const q = (req.query.q as string | undefined)?.trim();
     res.json(
@@ -415,7 +426,7 @@ function checkBuyerTax(data: Partial<z.output<typeof buyerSchema>>, existing?: {
 
 router.post(
   '/buyers',
-  canEdit,
+  can('buyers.view', 'buyers.manage'),
   asyncHandler(async (req, res) => {
     const data = buyerSchema.parse(req.body);
     checkBuyerTax(data);
@@ -425,7 +436,7 @@ router.post(
 
 router.patch(
   '/buyers/:id',
-  canEdit,
+  can('buyers.view', 'buyers.manage'),
   asyncHandler(async (req, res) => {
     const data = buyerSchema.partial().parse(req.body);
     const id = Number(req.params.id);
@@ -443,7 +454,7 @@ router.patch(
 
 router.delete(
   '/buyers/:id',
-  canEdit,
+  can('buyers.view', 'buyers.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const buyer = await prisma.buyer.findUnique({ where: { id } });
@@ -473,6 +484,7 @@ router.delete(
 
 router.get(
   '/attributes',
+  canReference,
   asyncHandler(async (req, res) => {
     const type = req.query.type as string | undefined;
     res.json(
@@ -494,7 +506,7 @@ const attrSchema = z.object({
 
 router.post(
   '/attributes',
-  canEdit,
+  can('masters.view', 'attributes.manage'),
   asyncHandler(async (req, res) => {
     const data = attrSchema.parse(req.body);
     res.status(201).json(await prisma.attributeValue.create({ data: { ...data, type: data.type.toUpperCase() } }));
@@ -503,7 +515,7 @@ router.post(
 
 router.patch(
   '/attributes/:id',
-  canEdit,
+  can('masters.view', 'attributes.manage'),
   asyncHandler(async (req, res) => {
     const data = attrSchema.partial().parse(req.body);
     res.json(await prisma.attributeValue.update({ where: { id: Number(req.params.id) }, data }));
@@ -512,7 +524,7 @@ router.patch(
 
 router.delete(
   '/attributes/:id',
-  canEdit,
+  can('masters.view', 'attributes.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const attr = await prisma.attributeValue.findUnique({ where: { id } });
@@ -540,6 +552,7 @@ const stageLineInclude = { steps: { orderBy: { sortOrder: 'asc' as const } }, _c
 
 router.get(
   '/stage-lines',
+  canReference,
   asyncHandler(async (_req, res) => {
     res.json(await prisma.stageLine.findMany({ include: stageLineInclude, orderBy: [{ isDefault: 'desc' }, { code: 'asc' }] }));
   })
@@ -567,7 +580,7 @@ const stageLineSchema = z.object({
 
 router.post(
   '/stage-lines',
-  canEdit,
+  can('masters.view', 'stagelines.manage'),
   asyncHandler(async (req, res) => {
     const data = stageLineSchema.parse(req.body);
     const created = await prisma.$transaction(async (tx) => {
@@ -594,7 +607,7 @@ router.post(
  */
 router.patch(
   '/stage-lines/:id',
-  canEdit,
+  can('masters.view', 'stagelines.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = stageLineSchema.partial().parse(req.body);
@@ -623,7 +636,7 @@ router.patch(
 
 router.delete(
   '/stage-lines/:id',
-  canEdit,
+  can('masters.view', 'stagelines.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const line = await prisma.stageLine.findUnique({ where: { id }, include: { _count: { select: { products: true, orderLines: true } } } });
@@ -643,6 +656,7 @@ router.delete(
 
 router.get(
   '/methods',
+  canReference,
   asyncHandler(async (_req, res) => {
     res.json(await prisma.costMethod.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }));
   })
@@ -671,7 +685,7 @@ function checkExpr(expr?: string) {
 
 router.post(
   '/methods',
-  canEdit,
+  can('masters.view', 'costmethods.manage'),
   asyncHandler(async (req, res) => {
     const data = methodSchema.parse(req.body);
     checkExpr(data.expression);
@@ -681,7 +695,7 @@ router.post(
 
 router.patch(
   '/methods/:id',
-  canEdit,
+  can('masters.view', 'costmethods.manage'),
   asyncHandler(async (req, res) => {
     const data = methodSchema.partial().parse(req.body);
     checkExpr(data.expression);
@@ -696,7 +710,7 @@ router.patch(
 
 router.delete(
   '/methods/:id',
-  canEdit,
+  can('masters.view', 'costmethods.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const method = await prisma.costMethod.findUnique({ where: { id } });

@@ -31,8 +31,8 @@ export default function ProformaDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const editable = hasRole('Operator');
+  const { can } = useAuth();
+  const editable = can('proformas.edit');
   const { data: p, isLoading, isError } = useProforma(id);
   // The letterhead comes from the Company record, so the printed page and the PDF that
   // goes to the buyer cannot say different things.

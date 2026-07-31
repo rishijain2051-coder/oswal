@@ -131,8 +131,8 @@ function AttributesTab() {
 }
 
 export default function MastersPage() {
-  const { hasRole } = useAuth();
-  if (!hasRole('Manager')) {
+  const { can } = useAuth();
+  if (!can('masters.view')) {
     return <Result status="403" title="Restricted" subTitle="Master data is editable by Managers and Admins only." />;
   }
 

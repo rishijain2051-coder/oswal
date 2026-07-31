@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, can, canAny } from '../middleware/auth';
 import { nextDocNumber } from '../lib/numbering';
 import { round } from '../lib/costing';
 import { lockOrder } from '../lib/rowLock';
@@ -64,10 +64,6 @@ const router = Router();
 // A route param here is always a database id — see guardIdParams.
 guardIdParams(router);
 router.use(authenticate);
-/** Operator packs — it is shop-floor work. */
-const canPack = requireRole('Operator');
-/** Manager+ for dispatch, invoices and anything with money on it. */
-const canManage = requireRole('Manager');
 
 /**
  * Move the order on, now that shipping can decide it.
@@ -103,6 +99,7 @@ async function lockOrders(tx: Parameters<typeof lockOrder>[0], orderIds: (number
  */
 router.get(
   '/finished/stock',
+  can('finished.view'),
   asyncHandler(async (req, res) => {
     const q = String(req.query.q ?? '').trim();
     const pos = await finishedPosition();
@@ -162,6 +159,7 @@ router.get(
 /** The adjustment ledger — the only part of finished stock anybody types. */
 router.get(
   '/finished/txns',
+  can('finished.view'),
   asyncHandler(async (req, res) => {
     const productId = req.query.productId ? Number(req.query.productId) : undefined;
     const rows = await prisma.finishedTxn.findMany({
@@ -206,7 +204,7 @@ const adjustmentSchema = z.object({
 
 router.post(
   '/finished/txns',
-  canManage,
+  can('finished.view', 'finished.adjust'),
   asyncHandler(async (req, res) => {
     const data = adjustmentSchema.parse(req.body);
 
@@ -256,7 +254,7 @@ router.post(
 
 router.delete(
   '/finished/txns/:id',
-  canManage,
+  can('finished.view', 'finished.adjust'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     await prisma.$transaction(async (tx) => {
@@ -288,6 +286,7 @@ router.delete(
 /** What is finished and still unpacked, ready to box. */
 router.get(
   '/packing/queue',
+  can('packing.view'),
   asyncHandler(async (_req, res) => {
     const pos = await finishedPosition();
     const lineIds = [...pos.byOrderLine.keys()];
@@ -345,6 +344,7 @@ router.get(
 
 router.get(
   '/packing',
+  can('packing.view'),
   asyncHandler(async (req, res) => {
     const orderId = req.query.orderId ? Number(req.query.orderId) : undefined;
     const unshipped = String(req.query.unshipped ?? '') === '1';
@@ -385,7 +385,7 @@ const packSchema = z.object({ batches: z.array(packLineSchema).min(1) });
 
 router.post(
   '/packing',
-  canPack,
+  can('finished.view', 'packing.view', 'packing.manage'),
   asyncHandler(async (req, res) => {
     const { batches } = packSchema.parse(req.body);
 
@@ -470,7 +470,7 @@ router.post(
 /** Unpack. Refused once any of its cartons are on a live shipment. */
 router.delete(
   '/packing/:id',
-  canPack,
+  can('finished.view', 'packing.view', 'packing.manage'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     await prisma.$transaction(async (tx) => {
@@ -501,7 +501,7 @@ router.delete(
 /** In the trash. Declared before `/shipments/:id` so the literal path wins. */
 router.get(
   '/shipments/trash',
-  canManage,
+  can('shipments.view', 'shipments.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.shipment.findMany({
@@ -520,7 +520,7 @@ router.get(
  */
 router.get(
   '/shipments/candidates',
-  canManage,
+  can('shipments.view', 'shipments.create'),
   asyncHandler(async (req, res) => {
     const buyerId = req.query.buyerId ? Number(req.query.buyerId) : undefined;
     /**
@@ -540,7 +540,7 @@ router.get(
 
 router.get(
   '/shipments',
-  canManage,
+  can('shipments.view'),
   asyncHandler(async (req, res) => {
     const status = req.query.status ? String(req.query.status) : undefined;
     const rows = await prisma.shipment.findMany({
@@ -554,7 +554,7 @@ router.get(
 
 router.get(
   '/shipments/:id',
-  canManage,
+  can('shipments.view'),
   asyncHandler(async (req, res) => {
     res.json(serializeShipment(await loadShipment(Number(req.params.id))));
   })
@@ -662,7 +662,7 @@ async function assertShippable(
 
 router.post(
   '/shipments',
-  canManage,
+  can('packing.view', 'shipments.view', 'shipments.create'),
   asyncHandler(async (req, res) => {
     const data = shipmentSchema.parse(req.body);
 
@@ -713,7 +713,7 @@ router.post(
  */
 router.put(
   '/shipments/:id',
-  canManage,
+  can('shipments.view', 'shipments.edit'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = shipmentSchema.parse(req.body);
@@ -779,7 +779,7 @@ router.put(
 /** Mark it gone (or back). The order status follows from this, not from a dropdown. */
 router.patch(
   '/shipments/:id/status',
-  canManage,
+  can('shipments.view', 'shipments.status'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const { status, shipDate } = z.object({ status: z.enum(SHIPMENT_STATUSES), shipDate: z.coerce.date().nullable().optional() }).parse(req.body);
@@ -802,7 +802,7 @@ router.patch(
 
 router.post(
   '/shipments/:id/restore',
-  canManage,
+  can('shipments.view', 'shipments.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.shipment.findUnique({ where: { id }, select: { deletedAt: true, number: true, lines: { select: { packingBatch: { select: { orderLine: { select: { orderId: true } } } } } } } });
@@ -820,7 +820,7 @@ router.post(
 /** Destroy for good. Admin only, only from the trash. */
 router.delete(
   '/shipments/:id/permanent',
-  requireRole('Admin'),
+  can('shipments.view', 'shipments.restore', 'shipments.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.shipment.findUnique({ where: { id }, select: { deletedAt: true, number: true, invoices: { select: { number: true } } } });
@@ -837,7 +837,7 @@ router.delete(
 /** To the trash. Refused while an invoice references it — cancel the invoice first. */
 router.delete(
   '/shipments/:id',
-  canManage,
+  can('shipments.view', 'shipments.delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const result = await prisma.$transaction(async (tx) => {
@@ -863,7 +863,7 @@ router.delete(
 /** Suggest a container plan. Advisory: the packer moves cartons afterwards. */
 router.post(
   '/shipments/plan',
-  canManage,
+  can('shipments.view', 'shipments.plan'),
   asyncHandler(async (req, res) => {
     const { lines } = z.object({ lines: z.array(z.object({ packingBatchId: z.number().int(), cartons: z.number().int().positive(), qty: z.number().int().positive() })).min(1) }).parse(req.body);
     const [batches, types] = await Promise.all([
@@ -898,7 +898,7 @@ router.post(
 
 router.get(
   '/invoices/trash',
-  canManage,
+  can('invoices.view', 'invoices.restore'),
   asyncHandler(async (_req, res) => {
     res.json(
       await prisma.invoice.findMany({
@@ -912,7 +912,7 @@ router.get(
 
 router.get(
   '/invoices',
-  canManage,
+  can('invoices.view'),
   asyncHandler(async (req, res) => {
     const status = req.query.status ? String(req.query.status) : undefined;
     const [rows, ourState] = await Promise.all([
@@ -930,7 +930,7 @@ router.get(
 
 router.get(
   '/invoices/:id',
-  canManage,
+  can('invoices.view'),
   asyncHandler(async (req, res) => {
     const ourState = await companyState();
     res.json(serializeInvoice(await loadInvoice(Number(req.params.id)), ourState));
@@ -950,7 +950,7 @@ router.get(
  */
 router.post(
   '/invoices/from-shipment/:shipmentId',
-  canManage,
+  can('invoices.view', 'invoices.create'),
   asyncHandler(async (req, res) => {
     const shipmentId = Number(req.params.shipmentId);
     const { buyerId, invoiceDate, incoterms } = z
@@ -1090,7 +1090,7 @@ const invoiceUpdateSchema = z.object({
 
 router.put(
   '/invoices/:id',
-  canManage,
+  can('invoices.view', 'invoices.edit'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const data = invoiceUpdateSchema.parse(req.body);
@@ -1142,7 +1142,7 @@ function assertInvoiceAttributable(lines: { id: number; orderLineId: number | nu
 /** Issue it. Only from here does it become a debt. */
 router.patch(
   '/invoices/:id/status',
-  canManage,
+  can('invoices.view', 'invoices.issue'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const { status } = z.object({ status: z.enum(INVOICE_STATUSES) }).parse(req.body);
@@ -1174,7 +1174,7 @@ const uploadQr = imageUploader('invoice-qr-');
 /** The e-invoice QR, through the same magic-byte pipeline as every other image. */
 router.post(
   '/invoices/:id/qr',
-  canManage,
+  can('invoices.view', 'invoices.documents'),
   uploadQr.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) throw new ApiError(400, 'No file was uploaded.');
@@ -1193,7 +1193,7 @@ router.post(
 
 router.post(
   '/invoices/:id/restore',
-  canManage,
+  can('invoices.view', 'invoices.restore'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.invoice.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -1206,7 +1206,7 @@ router.post(
 
 router.delete(
   '/invoices/:id/permanent',
-  requireRole('Admin'),
+  can('invoices.view', 'invoices.restore', 'invoices.purge'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.invoice.findUnique({ where: { id }, select: { deletedAt: true, number: true, qrFilename: true, ledger: { select: { id: true } } } });
@@ -1223,7 +1223,7 @@ router.delete(
 
 router.delete(
   '/invoices/:id',
-  canManage,
+  can('invoices.view', 'invoices.delete'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const existing = await prisma.invoice.findUnique({ where: { id }, select: { deletedAt: true, number: true } });
@@ -1299,7 +1299,7 @@ const sendPdf = (res: Response, pdf: Buffer, filename: string) => {
 
 router.get(
   '/shipments/:id/packing-list',
-  canManage,
+  can('shipments.view', 'shipments.documents'),
   asyncHandler(async (req, res) => {
     const s = serializeShipment(await loadShipment(Number(req.params.id)));
     sendPdf(res, await packingListPdf(shipmentPdfInput(s, await ensureCompany())), `${s.number}-packing-list.pdf`);
@@ -1308,7 +1308,7 @@ router.get(
 
 router.get(
   '/shipments/:id/vgm',
-  canManage,
+  can('shipments.view', 'shipments.documents'),
   asyncHandler(async (req, res) => {
     const s = serializeShipment(await loadShipment(Number(req.params.id)));
     if (!s.containers.length) throw new ApiError(409, `${s.number} has no containers yet, so there is no gross mass to declare.`);
@@ -1318,7 +1318,7 @@ router.get(
 
 router.get(
   '/shipments/:id/annexure',
-  canManage,
+  can('shipments.view', 'shipments.documents'),
   asyncHandler(async (req, res) => {
     const s = serializeShipment(await loadShipment(Number(req.params.id)));
     sendPdf(res, await containerAnnexurePdf(shipmentPdfInput(s, await ensureCompany())), `${s.number}-annexure.pdf`);
@@ -1327,7 +1327,7 @@ router.get(
 
 router.get(
   '/shipments/:id/coo',
-  canManage,
+  can('shipments.view', 'shipments.documents'),
   asyncHandler(async (req, res) => {
     const s = serializeShipment(await loadShipment(Number(req.params.id)));
     sendPdf(res, await certificateOfOriginPdf(shipmentPdfInput(s, await ensureCompany())), `${s.number}-coo.pdf`);
@@ -1388,7 +1388,7 @@ async function invoicePdfInput(id: number) {
 
 router.get(
   '/invoices/:id/pdf',
-  canManage,
+  can('invoices.view', 'invoices.documents'),
   asyncHandler(async (req, res) => {
     const { inv, input } = await invoicePdfInput(Number(req.params.id));
     sendPdf(res, await invoicePdf(input), `${inv.number}.pdf`);
@@ -1405,7 +1405,7 @@ router.get(
  */
 router.get(
   '/invoices/:id/mail.eml',
-  canManage,
+  can('invoices.view', 'invoices.documents'),
   asyncHandler(async (req, res) => {
     const { inv, input } = await invoicePdfInput(Number(req.params.id));
     const pdf = await invoicePdf(input);
@@ -1460,6 +1460,7 @@ router.get(
  */
 router.get(
   '/orders/:id/fulfilment',
+  can('orders.view'),
   asyncHandler(async (req, res) => {
     const orderId = Number(req.params.id);
     const order = await prisma.order.findUnique({
@@ -1554,6 +1555,7 @@ router.get(
 
 router.get(
   '/sales/dashboard',
+  canAny('finished.view', 'shipments.view', 'invoices.view'),
   asyncHandler(async (_req, res) => {
     const [pos, shipments, invoices, ourState] = await Promise.all([
       finishedPosition(),

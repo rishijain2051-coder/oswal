@@ -7,7 +7,7 @@ const { Title, Text } = Typography;
 
 export default function ProductModuleHome() {
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
 
   return (
     <div>
@@ -22,7 +22,7 @@ export default function ProductModuleHome() {
           </Title>
           <Text type="secondary">Everything about your products — the source of truth for costing, operations & sales.</Text>
         </div>
-        {hasRole('Operator') && (
+        {can('products.create') && (
           <Button type="primary" size="large" icon={<PlusOutlined />} onClick={() => navigate('/products/new')}>
             Create Product
           </Button>

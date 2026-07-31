@@ -19,8 +19,8 @@ const { Text, Paragraph } = Typography;
 export default function StatutoryTab() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canEdit = hasRole('Admin');
+  const { can } = useAuth();
+  const canEdit = can('statutory.components.manage');
   const { data: components, isLoading } = useStatutoryComponents();
   const [editing, setEditing] = useState<StatutoryComponent | 'new' | null>(null);
   const [form] = Form.useForm();

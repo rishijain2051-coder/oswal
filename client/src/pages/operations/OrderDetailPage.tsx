@@ -92,8 +92,8 @@ export default function OrderDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { message, modal } = App.useApp();
-  const { hasRole } = useAuth();
-  const editable = hasRole('Operator');
+  const { can } = useAuth();
+  const editable = can('orders.edit');
   const { data: o, isLoading, isError } = useOrder(id);
   /** Everything that happened after the board finished — one read, all of it derived. */
   const { data: f } = useOrderFulfilment(id);
@@ -159,7 +159,7 @@ export default function OrderDetailPage() {
   const symbol = o.currency?.symbol ?? '₹';
   const s = o.summary;
   const m = o.money;
-  const canManage = hasRole('Manager');
+  const canManage = can('orders.status');
   // Closed and Cancelled are the terminal states a human owns; everything else follows the
   // board and the shipments.
   const terminal = o.status === 'Closed' || o.status === 'Cancelled';

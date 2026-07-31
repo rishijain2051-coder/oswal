@@ -17,8 +17,8 @@ const { Paragraph, Text } = Typography;
 export default function SuggestionsTab() {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
-  const canEdit = hasRole('Admin');
+  const { can } = useAuth();
+  const canEdit = can('settings.app');
   const { data } = useAppSettings();
   const [form] = Form.useForm();
 

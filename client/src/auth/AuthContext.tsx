@@ -9,10 +9,19 @@ interface AuthContextValue {
   logout: () => void;
   /** Anyone may rotate their own password without an Admin. */
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
-  hasRole: (min: 'Viewer' | 'Operator' | 'Manager' | 'Admin') => boolean;
+  /**
+   * Does the signed-in user hold EVERY one of these permissions?
+   *
+   * This is for hiding buttons and menu items, and for nothing else. The server checks the
+   * same keys on every route — `can()` here only spares somebody clicking something that
+   * would be refused. An owner holds everything, which the server has already folded into
+   * the permission list, so there is no special case to remember at each call site.
+   */
+  can: (...keys: string[]) => boolean;
+  /** At least one of these — for a screen two different jobs reach. */
+  canAny: (...keys: string[]) => boolean;
+  isOwner: boolean;
 }
-
-const RANK: Record<string, number> = { Viewer: 1, Operator: 2, Manager: 3, Admin: 4 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -104,17 +113,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(TOKEN_KEY, res.data.token);
   }, []);
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
+  const value = useMemo<AuthContextValue>(() => {
+    const held = new Set(user?.permissions ?? []);
+    return {
       user,
       loading,
       login,
       logout,
       changePassword,
-      hasRole: (min) => (RANK[user?.role ?? ''] ?? 0) >= RANK[min],
-    }),
-    [user, loading, login, logout, changePassword]
-  );
+      can: (...keys) => keys.length > 0 && keys.every((k) => held.has(k)),
+      canAny: (...keys) => keys.some((k) => held.has(k)),
+      isOwner: user?.isOwner ?? false,
+    };
+  }, [user, loading, login, logout, changePassword]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

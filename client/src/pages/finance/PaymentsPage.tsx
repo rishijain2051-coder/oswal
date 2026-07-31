@@ -36,7 +36,7 @@ export default function PaymentsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [trashOpen, setTrashOpen] = useState(false);
   const { data: summary } = useFinanceSummary();
   const { data: receivableData, isLoading: loadingR } = useReceivables();
@@ -156,7 +156,7 @@ export default function PaymentsPage() {
       width: 190,
       render: (_: unknown, r: Receivable) => (
         <Space>
-          {hasRole('Manager') && (
+          {can('payments.record') && (
             <Button size="small" onClick={() => openForm('BUYER', 'PAYMENT', r.orderId, r.buyerId)}>
               Receipt
             </Button>
@@ -238,7 +238,7 @@ export default function PaymentsPage() {
       width: 180,
       render: (_: unknown, r: Payable) => (
         <Space>
-          {hasRole('Manager') && !r.unlinked && (
+          {can('payments.delete') && !r.unlinked && (
             <Button size="small" onClick={() => openForm(r.partyType, 'PAYMENT', undefined, r.partyId ?? undefined, r.partyName)}>
               Pay
             </Button>
@@ -270,7 +270,7 @@ export default function PaymentsPage() {
     { title: 'Amount', dataIndex: 'amount', align: 'right', width: 140, render: (v, r) => money(v, r.currency === 'INR' || !r.currency ? '₹' : `${r.currency} `) },
     { title: 'Ref', dataIndex: 'ref', width: 130, render: (v) => v || '—' },
     { title: 'Note', dataIndex: 'note', render: (v) => v || '—' },
-    ...(hasRole('Manager')
+    ...(can('payments.record')
       ? [
           {
             title: '',
@@ -312,8 +312,8 @@ export default function PaymentsPage() {
           <Text type="secondary">Every balance is worked out from the orders and the production board. You only record money that actually moved.</Text>
         </div>
         <Space>
-          {hasRole('Manager') && <TrashButton endpoint="/payments" onClick={() => setTrashOpen(true)} />}
-          {hasRole('Manager') && (
+          {can('payments.restore') && <TrashButton endpoint="/payments" onClick={() => setTrashOpen(true)} />}
+          {can('payments.record') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openForm('BUYER', 'PAYMENT')}>
               Record money
             </Button>

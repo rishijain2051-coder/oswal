@@ -20,7 +20,7 @@ export default function StockPage() {
   const { data: txns } = useStockTxns();
   const { data: suppliers } = useSuppliers('MATERIAL');
   // Same bar the server sets on the route, so nobody is shown a button that will 403.
-  const canEditStock = useAuth().hasRole('Operator');
+  const canEditStock = useAuth().can('stock.manage');
 
   const itemGroups = useMemo(() => {
     const map = new Map<string, RawItem[]>();
