@@ -309,11 +309,19 @@ export function documentTotalsOf(doc: DocumentLike, companyState?: string | null
 }
 
 /** Which document series a market uses. Overseas keeps the numbers it always had. */
-export function docKeys(market: string | null | undefined): { proforma: string; order: string } {
-  return isDomestic(market) ? { proforma: 'DPI', order: 'DORD' } : { proforma: 'PI', order: 'ORD' };
+export function docKeys(market: string | null | undefined): { proforma: string; order: string; invoice: string } {
+  return isDomestic(market) ? { proforma: 'DPI', order: 'DORD', invoice: 'DINV' } : { proforma: 'PI', order: 'ORD', invoice: 'INV' };
 }
 
 /** What the paperwork is called, which differs by market. */
 export function documentTitle(market: string | null | undefined): string {
   return isDomestic(market) ? 'QUOTATION' : 'PROFORMA INVOICE';
+}
+
+/**
+ * What the BILL is called. A domestic sale issues a tax invoice under GST; an export issues
+ * a commercial invoice, which is a customs document and carries no tax.
+ */
+export function invoiceTitle(market: string | null | undefined): string {
+  return isDomestic(market) ? 'TAX INVOICE' : 'COMMERCIAL INVOICE';
 }

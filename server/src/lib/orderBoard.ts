@@ -7,7 +7,13 @@ import { prisma } from '../db';
 import { ApiError } from './http';
 import { round } from './costing';
 import { buildBoard, impliedOrderStatus, rollUp, type LineBoard, type MoveRow, type StageRow } from './production';
-import { buildFinanceContext, jobworkEvents, type FinanceContext } from './finance';
+import {
+  buildFinanceContext,
+  jobworkEvents,
+  type FinanceContext,
+  type FinanceInvoiceLike,
+  type ReceivableBasis,
+} from './finance';
 import { documentTotalsOf, lineGross, lineNet } from './pricing';
 import { companyState } from './company';
 import { deliveryStatus, estimateCompletion } from './scheduling';
@@ -172,7 +178,7 @@ export function serializeOrder(o: OrderWithBoard, ctx: FinanceContext) {
  */
 export async function financeContextFor(orders: { buyerId: number }[]): Promise<FinanceContext> {
   const buyerIds = [...new Set(orders.map((o) => o.buyerId))];
-  const [related, entries, ourState] = await Promise.all([
+  const [related, entries, ourState, basis] = await Promise.all([
     prisma.order.findMany({
       // Soft-deleted orders leave the money picture exactly as cancelled ones do, and
       // for the same reason: the query excludes them, the pure functions stay ignorant.
@@ -216,7 +222,12 @@ export async function financeContextFor(orders: { buyerId: number }[]): Promise<
       orderBy: [{ date: 'asc' }, { id: 'asc' }],
     }),
     companyState(),
+    receivableBasis(),
   ]);
+
+  // Invoices are loaded ONLY when they are the debt. Under the ORDER basis they change
+  // nothing about allocation, and a list page should not pay for a join it will not read.
+  const invoices = basis === 'INVOICE' ? await loadFinanceInvoices(buyerIds) : [];
 
   // Jobwork accrued per vendor per order, straight off each board.
   const jobwork = new Map<number, Map<number, number>>();
@@ -229,7 +240,67 @@ export async function financeContextFor(orders: { buyerId: number }[]): Promise<
       }
     }
   }
-  return buildFinanceContext(related as never, entries as never, jobwork, ourState);
+  return buildFinanceContext(related as never, entries as never, jobwork, ourState, { basis, invoices });
+}
+
+/**
+ * The Admin's answer to "when does a buyer start owing us money?".
+ *
+ * Read through here rather than inline, so there is one place that decides what an absent
+ * or unrecognised value means: ORDER, which is how the app has always worked.
+ */
+export async function receivableBasis(): Promise<ReceivableBasis> {
+  const s = await prisma.appSetting.findUnique({ where: { id: 1 }, select: { receivableBasis: true } });
+  return s?.receivableBasis === 'INVOICE' ? 'INVOICE' : 'ORDER';
+}
+
+/**
+ * Live invoices for a set of buyers, shaped for the money engine.
+ *
+ * `orderId` is resolved onto each line from its order line, because that is what lets a
+ * receipt against a multi-order invoice be attributed back to the orders it covers.
+ */
+export async function loadFinanceInvoices(buyerIds: number[]): Promise<FinanceInvoiceLike[]> {
+  const rows = await prisma.invoice.findMany({
+    // Same rule as orders: a trashed invoice leaves the money picture the way a cancelled
+    // one does, because the query excludes it.
+    where: { deletedAt: null, buyerId: { in: buyerIds } },
+    select: {
+      id: true,
+      number: true,
+      buyerId: true,
+      status: true,
+      invoiceDate: true,
+      exchangeRate: true,
+      currency: { select: { code: true, symbol: true } },
+      buyer: { select: { market: true, state: true, name: true, code: true } },
+      taxMarket: true,
+      taxBuyerState: true,
+      taxCompanyState: true,
+      charges: { orderBy: { sortOrder: 'asc' as const } },
+      lines: {
+        select: {
+          qty: true,
+          unitPrice: true,
+          discountPct: true,
+          discountAmt: true,
+          gstRatePct: true,
+          orderLine: { select: { orderId: true } },
+        },
+      },
+    },
+  });
+  return rows.map((i) => ({
+    ...i,
+    lines: i.lines.map((l) => ({
+      qty: l.qty,
+      unitPrice: l.unitPrice,
+      discountPct: l.discountPct,
+      discountAmt: l.discountAmt,
+      gstRatePct: l.gstRatePct,
+      orderId: l.orderLine?.orderId ?? null,
+    })),
+  }));
 }
 
 /**
@@ -246,7 +317,22 @@ export function orderMoney(
 ) {
   const at = (m: Map<number, number>) => round(m.get(o.id) ?? 0);
 
-  const invoiced = o.status === 'Cancelled' ? 0 : total;
+  const cancelled = o.status === 'Cancelled';
+  /** What the order is worth. Unchanged meaning under either basis. */
+  const invoiced = cancelled ? 0 : total;
+  /** How much of that has actually been billed on an invoice. */
+  const billed = cancelled ? 0 : at(ctx.invoicedValue);
+  /**
+   * Confirmed but not yet billed. Empty under the ORDER basis, where the order already IS
+   * the receivable — see `ctx.orderBook`, which is only populated under INVOICE precisely so
+   * a page cannot show the same money as both owed and coming.
+   */
+  const orderBook = cancelled ? 0 : at(ctx.orderBook);
+  /**
+   * The debt. Under ORDER (the default) it is the order's own value, exactly as it always
+   * was. Under INVOICE only billed goods are owed for, and the rest is order book.
+   */
+  const debt = ctx.basis === 'INVOICE' ? billed : invoiced;
   const received = at(ctx.received);
   const jobworkAccrued = at(ctx.jobworkAccrued);
   const jobworkPaid = at(ctx.jobworkPaid);
@@ -262,10 +348,17 @@ export function orderMoney(
     exchangeRate: rate,
     invoiced: round(invoiced),
     received: round(received),
-    receivable: round(invoiced - received),
+    receivable: round(debt - received),
     /** Order value in rupees, at the rate snapshotted when the order was made. */
     invoicedInr: round(invoiced * rate),
-    receivableInr: round((invoiced - received) * rate),
+    receivableInr: round((debt - received) * rate),
+    /** Which question the receivable above answers. See AppSetting.receivableBasis. */
+    receivableBasis: ctx.basis,
+    /** Raised on invoices, and still only ordered. Both shown; only one is a debt. */
+    billed: round(billed),
+    billedInr: round(billed * rate),
+    orderBook: round(orderBook),
+    orderBookInr: round(orderBook * rate),
     jobworkAccrued,
     jobworkPaid: round(jobworkPaid),
     jobworkDue: round(jobworkAccrued - jobworkPaid),
@@ -300,14 +393,18 @@ export async function serializeOrders(orders: OrderWithBoard[]) {
 }
 
 /**
- * Move the order status along if the board says so (Confirmed -> Production ->
- * Ready). Shipped / Closed / Cancelled are human decisions and never touched.
+ * Move the order status along if the board — and the shipments — say so.
+ *
+ * `Confirmed -> Production -> Ready` comes from the board. `Shipped` comes from the
+ * dispatches, and is only considered when the caller passes `shipped`: a board-only caller
+ * behaves exactly as it always did, so a clearance cannot un-ship an order by omission.
+ * `Closed` and `Cancelled` remain human decisions and are never touched.
  */
-export async function syncOrderStatus(tx: Tx, orderId: number): Promise<string | null> {
+export async function syncOrderStatus(tx: Tx, orderId: number, shipped?: number): Promise<string | null> {
   const order = await tx.order.findUnique({ where: { id: orderId }, include: { lines: { include: { stages: true, moves: true } } } });
   if (!order) return null;
   const summary = rollUp(order.lines.map((l) => boardForLine(l as any)));
-  const next = impliedOrderStatus(order.status, summary);
+  const next = impliedOrderStatus(order.status, summary, shipped);
   if (!next) return null;
   await tx.order.update({ where: { id: orderId }, data: { status: next } });
   return next;

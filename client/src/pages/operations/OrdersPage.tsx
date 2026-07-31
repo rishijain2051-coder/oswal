@@ -63,7 +63,9 @@ export default function OrdersPage() {
         </span>
       ),
     },
-    { title: 'Delivery', dataIndex: 'deliveryDate', width: 110, render: (d) => (d ? dayjs(d).format('DD MMM YY') : '—') },
+    // "Due" rather than "Delivery": the derived on-track column further right is also
+    // about delivery, and two columns headed the same thing in one table read as a bug.
+    { title: 'Due', dataIndex: 'deliveryDate', width: 110, render: (d) => (d ? dayjs(d).format('DD MMM YY') : '—') },
     {
       title: 'Production',
       key: 'prod',
@@ -83,7 +85,7 @@ export default function OrdersPage() {
     { title: 'Total', dataIndex: 'total', align: 'right', width: 130, render: (v, r) => money(v, r.currency?.symbol ?? '₹') },
     { title: 'Status', dataIndex: 'status', width: 110, render: (s) => <Tag color={ORDER_STATUS_COLOR[s] ?? 'default'}>{s}</Tag> },
     {
-      title: 'Delivery',
+      title: 'On time?',
       key: 'delivery',
       width: 130,
       // Derived from the board, so it is always current.
@@ -101,9 +103,17 @@ export default function OrdersPage() {
       key: 'a',
       width: 120,
       render: (_, r) => (
+        // Icon-only buttons say nothing on their own, and "which one deletes?" is a bad
+        // question to have to answer by trial. The tooltip doubles as the accessible name.
         <Space>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/operations/orders/${r.id}`)} />
-          {hasRole('Operator') && <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/operations/orders/${r.id}/edit`)} />}
+          <Tooltip title="Open this order">
+            <Button size="small" aria-label="Open this order" icon={<EyeOutlined />} onClick={() => navigate(`/operations/orders/${r.id}`)} />
+          </Tooltip>
+          {hasRole('Operator') && (
+            <Tooltip title="Edit this order">
+              <Button size="small" aria-label="Edit this order" icon={<EditOutlined />} onClick={() => navigate(`/operations/orders/${r.id}/edit`)} />
+            </Tooltip>
+          )}
           {hasRole('Manager') && (
             <Popconfirm
               title="Delete this order?"
@@ -111,7 +121,9 @@ export default function OrdersPage() {
               onConfirm={() => del.mutate(r.id)}
               okButtonProps={{ danger: true }}
             >
-              <Button size="small" danger icon={<DeleteOutlined />} />
+              <Tooltip title="Move to trash">
+                <Button size="small" danger aria-label="Move this order to the trash" icon={<DeleteOutlined />} />
+              </Tooltip>
             </Popconfirm>
           )}
         </Space>

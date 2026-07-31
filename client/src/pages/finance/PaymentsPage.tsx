@@ -123,7 +123,7 @@ export default function PaymentsPage() {
     { title: 'Buyer', dataIndex: 'buyerName' },
     { title: 'Delivery', dataIndex: 'deliveryDate', width: 105, render: (d) => (d ? dayjs(d).format('DD MMM YY') : '—') },
     { title: 'Invoiced', dataIndex: 'invoiced', align: 'right', width: 130, render: (v, r) => money(v, r.symbol) },
-    { title: 'Received', dataIndex: 'received', align: 'right', width: 130, render: (v, r) => <span style={{ color: '#389e0d' }}>{money(v, r.symbol)}</span> },
+    { title: 'Received', dataIndex: 'received', align: 'right', width: 130, render: (v, r) => <span style={{ color: '#237804' }}>{money(v, r.symbol)}</span> },
     {
       title: 'Still to collect',
       dataIndex: 'balance',
@@ -131,7 +131,7 @@ export default function PaymentsPage() {
       width: 150,
       render: (v, r) => (
         <Tooltip title={r.exchangeRate !== 1 ? `≈ ${money(r.balanceInr, '₹')} at ${r.exchangeRate}` : undefined}>
-          <b style={{ color: v > 0 ? '#cf1322' : '#389e0d' }}>{money(v, r.symbol)}</b>
+          <b style={{ color: v > 0 ? '#cf1322' : '#237804' }}>{money(v, r.symbol)}</b>
         </Tooltip>
       ),
     },
@@ -145,7 +145,7 @@ export default function PaymentsPage() {
         const raw = r.invoiced > 0 ? Math.round((r.received / r.invoiced) * 100) : 0;
         return (
           <Tooltip title={raw > 100 ? `Paid ${money(r.received - r.invoiced, r.symbol)} more than invoiced — held on account` : undefined}>
-            <Progress percent={Math.min(raw, 100)} size="small" strokeColor={raw > 100 ? '#1677ff' : '#389e0d'} format={() => (raw > 100 ? 'credit' : `${raw}%`)} />
+            <Progress percent={Math.min(raw, 100)} size="small" strokeColor={raw > 100 ? '#1677ff' : '#237804'} format={() => (raw > 100 ? 'credit' : `${raw}%`)} />
           </Tooltip>
         );
       },
@@ -161,7 +161,7 @@ export default function PaymentsPage() {
               Receipt
             </Button>
           )}
-          <Button size="small" type="link" onClick={() => navigate(`/operations/payments/buyer/${r.buyerId}`)}>
+          <Button size="small" type="link" onClick={() => navigate(`/finance/payments/buyer/${r.buyerId}`)}>
             Statement
           </Button>
         </Space>
@@ -213,7 +213,7 @@ export default function PaymentsPage() {
         </Tooltip>
       ),
     },
-    { title: 'Paid', dataIndex: 'paid', align: 'right', width: 130, render: (v) => <span style={{ color: '#389e0d' }}>{money(v, '₹')}</span> },
+    { title: 'Paid', dataIndex: 'paid', align: 'right', width: 130, render: (v) => <span style={{ color: '#237804' }}>{money(v, '₹')}</span> },
     {
       title: 'Balance',
       dataIndex: 'balance',
@@ -249,8 +249,8 @@ export default function PaymentsPage() {
             onClick={() =>
               navigate(
                 r.partyId != null
-                  ? `/operations/payments/${r.partyType.toLowerCase()}/${r.partyId}`
-                  : `/operations/payments/${r.partyType.toLowerCase()}/by-name?name=${encodeURIComponent(r.partyName)}`
+                  ? `/finance/payments/${r.partyType.toLowerCase()}/${r.partyId}`
+                  : `/finance/payments/${r.partyType.toLowerCase()}/by-name?name=${encodeURIComponent(r.partyName)}`
               )
             }
           >
@@ -303,7 +303,7 @@ export default function PaymentsPage() {
 
   return (
     <div>
-      <Breadcrumb style={{ marginBottom: 16 }} items={[{ title: <Link to="/"><HomeOutlined /></Link> }, { title: <Link to="/operations">Operations</Link> }, { title: 'Payments' }]} />
+      <Breadcrumb style={{ marginBottom: 16 }} items={[{ title: <Link to="/"><HomeOutlined /></Link> }, { title: <Link to="/finance">Finance</Link> }, { title: 'Payments' }]} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
@@ -324,8 +324,8 @@ export default function PaymentsPage() {
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="To collect from buyers (₹)" value={money(summary?.receivableInr ?? 0, '₹')} valueStyle={{ fontSize: 20, color: '#389e0d' }} />
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Statistic title="To collect from buyers (₹)" value={money(summary?.receivableInr ?? 0, '₹')} valueStyle={{ fontSize: 20, color: '#237804' }} />
+            <Text type="secondary" style={{ fontSize: 12 }}>
               of {money(summary?.invoicedInr ?? 0, '₹')} invoiced
             </Text>
           </Card>
@@ -333,7 +333,7 @@ export default function PaymentsPage() {
         <Col xs={12} md={6}>
           <Card size="small">
             <Statistic title="Owed out (₹)" value={money(summary?.payableInr ?? 0, '₹')} valueStyle={{ fontSize: 20, color: '#cf1322' }} />
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               jobwork + material + wages
             </Text>
           </Card>
@@ -341,7 +341,7 @@ export default function PaymentsPage() {
         <Col xs={12} md={6}>
           <Card size="small">
             <Statistic title="Jobwork earned by vendors (₹)" value={money(summary?.jobworkAccrued ?? 0, '₹')} valueStyle={{ fontSize: 20 }} />
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               {summary?.jobworkEvents ?? 0} clearance(s) · paid {money(summary?.jobworkPaid ?? 0, '₹')} · due {money(summary?.jobworkDue ?? 0, '₹')}
             </Text>
           </Card>
@@ -351,9 +351,9 @@ export default function PaymentsPage() {
             <Statistic
               title="Net position (₹)"
               value={money((summary?.receivableInr ?? 0) - (summary?.payableInr ?? 0), '₹')}
-              valueStyle={{ fontSize: 20, color: (summary?.receivableInr ?? 0) - (summary?.payableInr ?? 0) >= 0 ? '#389e0d' : '#cf1322' }}
+              valueStyle={{ fontSize: 20, color: (summary?.receivableInr ?? 0) - (summary?.payableInr ?? 0) >= 0 ? '#237804' : '#cf1322' }}
             />
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               coming in minus going out
               {(summary?.buyerCreditInr ?? 0) > 0 ? ` · ${money(summary!.buyerCreditInr, '₹')} held on account` : ''}
             </Text>
@@ -481,7 +481,7 @@ export default function PaymentsPage() {
                                 ]
                               : []),
                             { title: 'Owed', dataIndex: 'amount', align: 'right', width: 120, render: (v: number) => money(v, '₹') },
-                            { title: 'Paid', dataIndex: 'paid', align: 'right', width: 120, render: (v: number) => <span style={{ color: '#389e0d' }}>{money(v, '₹')}</span> },
+                            { title: 'Paid', dataIndex: 'paid', align: 'right', width: 120, render: (v: number) => <span style={{ color: '#237804' }}>{money(v, '₹')}</span> },
                             { title: 'Balance', dataIndex: 'balance', align: 'right', width: 120, render: (v: number) => <b style={{ color: v > 0 ? '#cf1322' : '#999' }}>{money(v, '₹')}</b> },
                           ]}
                         />
@@ -516,8 +516,8 @@ export default function PaymentsPage() {
                       onClick: () =>
                         navigate(
                           r.partyId != null
-                            ? `/operations/payments/${r.partyType.toLowerCase()}/${r.partyId}`
-                            : `/operations/payments/${r.partyType.toLowerCase()}/by-name?name=${encodeURIComponent(r.name)}`
+                            ? `/finance/payments/${r.partyType.toLowerCase()}/${r.partyId}`
+                            : `/finance/payments/${r.partyType.toLowerCase()}/by-name?name=${encodeURIComponent(r.name)}`
                         ),
                     })}
                     columns={[
@@ -538,7 +538,7 @@ export default function PaymentsPage() {
                         ),
                       },
                       { title: 'Orders / bills', dataIndex: 'orders', align: 'right', width: 120 },
-                      { title: 'Owes us (₹)', dataIndex: 'owesUs', align: 'right', width: 150, render: (v) => (v ? <b style={{ color: '#389e0d' }}>{money(v, '₹')}</b> : '—') },
+                      { title: 'Owes us (₹)', dataIndex: 'owesUs', align: 'right', width: 150, render: (v) => (v ? <b style={{ color: '#237804' }}>{money(v, '₹')}</b> : '—') },
                       { title: 'We owe (₹)', dataIndex: 'weOwe', align: 'right', width: 150, render: (v) => (v ? <b style={{ color: '#cf1322' }}>{money(v, '₹')}</b> : '—') },
                       {
                         title: 'On account',

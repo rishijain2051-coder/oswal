@@ -83,25 +83,27 @@ export default function ProformasPage() {
       width: 160,
       render: (_, r) => (
         <Space>
-          <Tooltip title="Open">
-            <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}`)} />
+          <Tooltip title="Open this proforma">
+            <Button size="small" aria-label="Open this proforma" icon={<EyeOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}`)} />
           </Tooltip>
-          <Tooltip title="PDF">
-            <Button size="small" icon={<FilePdfOutlined />} onClick={() => fetchDocument(`/proformas/${r.id}/pdf`, `${r.number}.pdf`, true).catch((e) => message.error(e.message))} />
+          <Tooltip title="Download the PDF">
+            <Button size="small" aria-label="Download this proforma as a PDF" icon={<FilePdfOutlined />} onClick={() => fetchDocument(`/proformas/${r.id}/pdf`, `${r.number}.pdf`, true).catch((e) => message.error(e.message))} />
           </Tooltip>
           {hasRole('Operator') && !r.order && (
             <Tooltip title="Send to buyer">
-              <Button size="small" icon={<MailOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}`)} />
+              <Button size="small" aria-label="Send this proforma to the buyer" icon={<MailOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}`)} />
             </Tooltip>
           )}
           {hasRole('Operator') && r.canEdit && (
-            <Tooltip title="Edit">
-              <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}/edit`)} />
+            <Tooltip title="Edit this proforma">
+              <Button size="small" aria-label="Edit this proforma" icon={<EditOutlined />} onClick={() => navigate(`/operations/proformas/${r.id}/edit`)} />
             </Tooltip>
           )}
           {hasRole('Manager') && !r.order && (
             <Popconfirm title="Delete this proforma?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
+              <Tooltip title="Move to trash">
+                <Button size="small" danger aria-label="Move this proforma to the trash" icon={<DeleteOutlined />} />
+              </Tooltip>
             </Popconfirm>
           )}
         </Space>

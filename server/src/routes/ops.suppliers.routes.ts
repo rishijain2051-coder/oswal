@@ -4,6 +4,8 @@ import { prisma } from '../db';
 import { ApiError, asyncHandler } from '../lib/http';
 import { authenticate, requireRole } from '../middleware/auth';
 import { round } from '../lib/costing';
+import { like } from '../lib/search';
+import { trashedNote } from '../lib/references';
 
 const router = Router();
 router.use(authenticate);
@@ -20,7 +22,7 @@ router.get(
     const type = req.query.type as string | undefined;
     const where: any = {};
     if (type) where.type = type === 'JOBWORK' ? { in: ['JOBWORK', 'BOTH'] } : type === 'MATERIAL' ? { in: ['MATERIAL', 'BOTH'] } : type;
-    if (q) where.OR = [{ name: { contains: q } }, { code: { contains: q } }];
+    if (q) where.OR = [{ name: like(q) }, { code: like(q) }];
     res.json(await prisma.supplier.findMany({ where, orderBy: { name: 'asc' } }));
   })
 );
@@ -75,7 +77,7 @@ router.delete(
     ]);
     if (stages + ledger + stock > 0) {
       const bits = [stages && `${stages} production stage(s)`, ledger && `${ledger} money entry/entries`, stock && `${stock} stock movement(s)`].filter(Boolean).join(', ');
-      throw new ApiError(409, `${supplier.name} is still referenced by ${bits}. Deactivate them instead of deleting.`);
+      throw new ApiError(409, `${supplier.name} is still referenced by ${bits}.${await trashedNote([{ model: 'ledgerEntry', where: { supplierId: id } }])} Deactivate them instead of deleting.`);
     }
     await prisma.supplier.delete({ where: { id } });
     res.status(204).end();

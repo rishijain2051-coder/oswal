@@ -26,8 +26,10 @@ import { authenticate, requireRole, ROLE_RANK } from '../middleware/auth';
 import { imageUploader, keepRealImages, uploadDir } from '../lib/imageUpload';
 import { nextDocNumber } from '../lib/numbering';
 import { round } from '../lib/costing';
+import { like } from '../lib/search';
 import { buildWorkforceContext, ensureSettings, loadRules, statutoryPreview, workerStatement, workforceTotals, workerSelect } from '../lib/manforce';
 import { diffFields, logChanges } from '../lib/changeLog';
+import { trashedNote } from '../lib/references';
 import {
   ATTENDANCE_STATUSES,
   MONTHLY_DIVISORS,
@@ -156,7 +158,7 @@ router.delete(
     const [workers, ledger] = await Promise.all([prisma.worker.count({ where: { contractorId: id } }), prisma.ledgerEntry.count({ where: { contractorId: id } })]);
     if (workers + ledger > 0) {
       const bits = [workers && `${workers} worker(s)`, ledger && `${ledger} money entry/entries`].filter(Boolean).join(' and ');
-      throw new ApiError(409, `${contractor.name} still has ${bits}. Deactivate them instead of deleting.`);
+      throw new ApiError(409, `${contractor.name} still has ${bits}.${await trashedNote([{ model: 'ledgerEntry', where: { contractorId: id } }])} Deactivate them instead of deleting.`);
     }
     await prisma.contractor.delete({ where: { id } });
     res.status(204).end();
@@ -317,7 +319,7 @@ router.get(
     if (req.query.contractorId) where.contractorId = Number(req.query.contractorId);
     if (req.query.tradeId) where.tradeId = Number(req.query.tradeId);
     if (req.query.payType) where.payType = req.query.payType;
-    if (q) where.OR = [{ name: { contains: q } }, { code: { contains: q } }, { phone: { contains: q } }];
+    if (q) where.OR = [{ name: like(q) }, { code: like(q) }, { phone: like(q) }];
 
     const workers = await prisma.worker.findMany({
       where,
@@ -536,7 +538,7 @@ router.delete(
     ]);
     if (moves + ledger + advances + posted > 0) {
       const bits = [moves && `${moves} piece movement(s)`, ledger && `${ledger} money entry/entries`, advances && `${advances} advance(s)`, posted && `${posted} statutory posting line(s)`].filter(Boolean).join(', ');
-      throw new ApiError(409, `${worker.name} is referenced by ${bits}. Mark them as having left instead of deleting them.`);
+      throw new ApiError(409, `${worker.name} is referenced by ${bits}.${await trashedNote([{ model: 'ledgerEntry', where: { workerId: id } }])} Mark them as having left instead of deleting them.`);
     }
     // Attendance and photos are the worker's own records and go with them.
     const documents = await prisma.workerDocument.findMany({ where: { workerId: id } });

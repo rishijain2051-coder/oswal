@@ -8,7 +8,19 @@ import { computeCostSheet } from '../lib/productCosting';
 import { loadMethodMap } from '../lib/methods';
 import { round } from '../lib/costing';
 import { buildBoard } from '../lib/production';
-import { allocateFifo, buildStatement, jobworkEventsForOrder, receivablesByCurrency, type AllocationResult, type Bucket, type ForexOrderRow, type PaymentRow } from '../lib/finance';
+import {
+  allocateFifo,
+  buildStatement,
+  jobworkEventsForOrder,
+  receivablesByCurrency,
+  type AllocationResult,
+  type Bucket,
+  type FinanceInvoiceLike,
+  type ForexOrderRow,
+  type PaymentRow,
+  type ReceivableBasis,
+} from '../lib/finance';
+import { loadFinanceInvoices, receivableBasis } from '../lib/orderBoard';
 import { buildWorkforceContext, contractorStatement, workerStatement, workforceTotals, type WorkforceContext } from '../lib/manforce';
 import { dayKey } from '../lib/workforce';
 import { documentValueOf } from '../lib/pricing';
@@ -295,7 +307,7 @@ const financeEntryInclude = {
 
 /** Everything needed to compute the money position, in one read. */
 async function financeData() {
-  const [orders, entries, currencies, ourState] = await Promise.all([
+  const [orders, entries, currencies, ourState, basis] = await Promise.all([
     prisma.order.findMany({ where: LIVE_ORDER, include: financeOrderInclude, orderBy: [{ orderDate: 'asc' }, { id: 'asc' }] }),
     // A receipt booked against a trashed order leaves with it. Otherwise that order's
     // bucket vanishes from the FIFO run while the money stays behind, and `allocateFifo`
@@ -308,6 +320,7 @@ async function financeData() {
     }),
     prisma.currency.findMany({ select: { code: true, symbol: true, rateToBase: true } }),
     companyState(),
+    receivableBasis(),
   ]);
   /**
    * Rupee rate for a currency code. Taken from the currency master rather than from
@@ -316,7 +329,10 @@ async function financeData() {
    */
   const rateOf = (code: string) => currencies.find((c) => c.code === code)?.rateToBase ?? 1;
   const symbolOf = (code: string) => currencies.find((c) => c.code === code)?.symbol ?? '';
-  return { orders, entries, rateOf, symbolOf, ourState };
+  // Invoices are only the debt under the INVOICE basis; under ORDER they change no figure,
+  // so a list page should not pay for the join.
+  const invoices = basis === 'INVOICE' ? await loadFinanceInvoices([...new Set(orders.map((o) => o.buyerId))]) : [];
+  return { orders, entries, rateOf, symbolOf, ourState, basis, invoices };
 }
 
 type FinanceOrder = Awaited<ReturnType<typeof financeData>>['orders'][number];
@@ -341,7 +357,8 @@ const entriesFor = (entries: FinanceEntry[], partyType: string, kind: 'BILL' | '
       (partyName != null ? e.partyName === partyName : true)
   );
 
-const toPaymentRows = (entries: FinanceEntry[]): PaymentRow[] => entries.map((e) => ({ id: e.id, date: e.date, amount: e.amount, orderId: e.orderId }));
+const toPaymentRows = (entries: FinanceEntry[]): PaymentRow[] =>
+  entries.map((e) => ({ id: e.id, date: e.date, amount: e.amount, orderId: e.orderId, invoiceId: e.invoiceId }));
 
 const sumOf = (entries: { partyType: string; kind: string; amount: number }[], partyType: string, kind: string) =>
   entries.filter((e) => e.partyType === partyType && e.kind === kind).reduce((a, e) => a + e.amount, 0);
@@ -376,28 +393,119 @@ function buyerPositions(
   buyerId: number,
   rateOf: (code: string) => number,
   symbolOf: (code: string) => string,
-  ourState: string | null
+  ourState: string | null,
+  basis: ReceivableBasis = 'ORDER',
+  invoices: FinanceInvoiceLike[] = []
 ) {
   const mine = orders.filter((o) => o.buyerId === buyerId);
+  // Only an ISSUED invoice is a debt — a draft has not been sent, a cancelled one keeps its
+  // number but stops being owed. Same rule as buildFinanceContext, deliberately worded the
+  // same way so the two cannot drift.
+  const myInvoices = invoices.filter((i) => i.buyerId === buyerId && i.status === 'ISSUED');
   const receipts = entriesFor(entries, 'BUYER', 'PAYMENT', buyerId);
-  const currencies = [...new Set([...mine.map((o) => o.currency?.code ?? 'INR'), ...receipts.map((r) => r.currency ?? 'INR')])];
+  const debtCodes = basis === 'INVOICE' ? myInvoices.map((i) => i.currency?.code ?? 'INR') : mine.map((o) => o.currency?.code ?? 'INR');
+  const currencies = [...new Set([...debtCodes, ...receipts.map((r) => r.currency ?? 'INR')])];
 
   return currencies.map((code) => {
     const ordersInCcy = mine.filter((o) => (o.currency?.code ?? 'INR') === code);
+    const invoicesInCcy = myInvoices.filter((i) => (i.currency?.code ?? 'INR') === code);
     const receiptsInCcy = receipts.filter((r) => (r.currency ?? 'INR') === code);
-    const buckets: Bucket[] = ordersInCcy.map((o) => ({ key: `order-${o.id}`, orderId: o.id, label: o.number, date: o.orderDate, gross: orderValue(o, ourState) }));
+
+    /**
+     * What is owed, and at what grain. Under ORDER the order is the debt; under INVOICE the
+     * invoice is, and it may cover several orders — which is exactly why a caller must not
+     * assume one bucket is one order. Use `subjectOf()` below.
+     */
+    const buckets: Bucket[] =
+      basis === 'INVOICE'
+        ? invoicesInCcy.map((i) => ({
+            key: `invoice-${i.id}`,
+            orderId: null,
+            invoiceId: i.id,
+            label: i.number,
+            date: i.invoiceDate,
+            gross: documentValueOf(i as never, ourState),
+          }))
+        : ordersInCcy.map((o) => ({ key: `order-${o.id}`, orderId: o.id, label: o.number, date: o.orderDate, gross: orderValue(o, ourState) }));
+
     const result = allocateFifo(buckets, toPaymentRows(receiptsInCcy));
     const rate = rateOf(code);
+
+    /**
+     * What a bucket is ABOUT, for a page that has to name it. One shape whichever basis is
+     * in force, so no caller has to branch — and none of them may reach for
+     * `orders.find(o => o.id === b.orderId)!`, which is null on an invoice bucket.
+     *
+     * `orderId` on an invoice subject is the order its largest line belongs to. It is for
+     * linking, not for arithmetic: an invoice spanning two orders is still ONE debt, and
+     * splitting it is `attributeToOrders()`'s job inside the finance engine.
+     */
+    const subjectOf = (b: Bucket) => {
+      if (b.invoiceId != null) {
+        const inv = invoicesInCcy.find((i) => i.id === b.invoiceId)!;
+        const primary = [...inv.lines].sort((a, x) => (x.qty * x.unitPrice) - (a.qty * a.unitPrice))[0]?.orderId ?? null;
+        const order = primary != null ? ordersInCcy.find((o) => o.id === primary) : undefined;
+        return {
+          kind: 'INVOICE' as const,
+          id: inv.id,
+          number: inv.number,
+          date: inv.invoiceDate,
+          exchangeRate: inv.exchangeRate ?? 1,
+          orderId: primary,
+          orderNumber: order?.number ?? null,
+          status: inv.status,
+          // The invoice's own buyer is the fallback: this buyer may have no live order in
+          // this currency at all, and a blank name on a receivables row is a bug nobody
+          // would report as one.
+          buyer: order?.buyer ?? (inv.buyer?.name ? { name: inv.buyer.name, code: inv.buyer.code ?? '' } : null),
+          deliveryDate: order?.deliveryDate ?? null,
+        };
+      }
+      const order = ordersInCcy.find((o) => o.id === b.orderId)!;
+      return {
+        kind: 'ORDER' as const,
+        id: order.id,
+        number: order.number,
+        date: order.orderDate,
+        exchangeRate: order.exchangeRate ?? 1,
+        orderId: order.id,
+        orderNumber: order.number,
+        status: order.status,
+        buyer: order.buyer,
+        deliveryDate: order.deliveryDate,
+      };
+    };
+
+    /**
+     * Confirmed but not yet billed. Under INVOICE this is deliberately OUTSIDE the buckets
+     * above — it is order book, not a receivable. Zero under ORDER, where the order already
+     * IS the debt and counting it twice would double the buyer's balance.
+     */
+    const orderBook =
+      basis === 'INVOICE'
+        ? round(
+            Math.max(
+              0,
+              ordersInCcy.reduce((a, o) => a + orderValue(o, ourState), 0) -
+                invoicesInCcy.reduce((a, i) => a + documentValueOf(i as never, ourState), 0)
+            )
+          )
+        : 0;
+
     return {
       currency: code,
       symbol: symbolOf(code) || '₹',
       exchangeRate: rate,
+      basis,
       invoiced: round(buckets.reduce((a, b) => a + b.gross, 0)),
       received: round(receiptsInCcy.reduce((a, r) => a + r.amount, 0)),
       balance: round(result.buckets.reduce((a, b) => a + b.balance, 0)),
       credit: result.credit,
+      orderBook,
       buckets: result.buckets,
       orders: ordersInCcy,
+      invoices: invoicesInCcy,
+      subjectOf,
       receipts: describePayments(receiptsInCcy, result),
       result,
     };
@@ -448,50 +556,58 @@ function billedPosition(entries: FinanceEntry[], partyType: 'SUPPLIER' | 'WORKER
 router.get(
   '/finance/receivables',
   asyncHandler(async (_req, res) => {
-    const { orders, entries, rateOf, symbolOf, ourState } = await financeData();
+    const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
     const buyerIds = [...new Set(orders.map((o) => o.buyerId))];
 
     const rows: any[] = [];
     const credits: any[] = [];
+    let orderBookInr = 0;
     for (const buyerId of buyerIds) {
-      for (const pos of buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState)) {
+      for (const pos of buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState, basis, invoices)) {
         const buyer = pos.orders[0]?.buyer;
+        orderBookInr = round(orderBookInr + pos.orderBook * pos.exchangeRate);
         for (const b of pos.buckets) {
-          const order = pos.orders.find((o) => o.id === b.orderId)!;
-          const settled = pos.receipts.filter((r) => r.allocations.some((a) => a.orderId === b.orderId));
+          // What this debt is about — an order or an invoice, one shape either way.
+          const s = pos.subjectOf(b);
+          // Matched on the bucket KEY, not on an order id: an invoice bucket carries no
+          // order id, and two orders could otherwise collide on a null.
+          const settled = pos.receipts.filter((r) => r.allocations.some((a) => a.key === b.key));
           rows.push({
-            orderId: order.id,
-            orderNumber: order.number,
+            docKind: s.kind,
+            docId: s.id,
+            docNumber: s.number,
+            orderId: s.orderId,
+            orderNumber: s.orderNumber,
             buyerId,
-            buyerName: order.buyer.name,
-            status: order.status,
-            orderDate: order.orderDate,
-            deliveryDate: order.deliveryDate,
+            buyerName: buyer?.name ?? s.buyer?.name ?? '',
+            status: s.status,
+            orderDate: s.date,
+            deliveryDate: s.deliveryDate,
             currency: pos.currency,
             symbol: pos.symbol,
-            exchangeRate: order.exchangeRate ?? 1,
+            exchangeRate: s.exchangeRate,
             invoiced: b.gross,
             received: b.paid,
             balance: b.balance,
-            balanceInr: round(b.balance * (order.exchangeRate ?? 1)),
+            balanceInr: round(b.balance * s.exchangeRate),
             // The same money three ways: the buyer's currency, rupees at the rate the
-            // order was booked at, and rupees at today's rate. The gap between the last
+            // document was booked at, and rupees at today's rate. The gap between the last
             // two is unrealised forex — nothing is booked until the money arrives.
             invoicedFcy: b.gross,
             receivedFcy: b.paid,
             receivableFcy: b.balance,
-            snapshotRate: order.exchangeRate ?? 1,
+            snapshotRate: s.exchangeRate,
             currentRate: rateOf(pos.currency),
-            invoicedInr: round(b.gross * (order.exchangeRate ?? 1)),
-            receivableInr: round(b.balance * (order.exchangeRate ?? 1)),
+            invoicedInr: round(b.gross * s.exchangeRate),
+            receivableInr: round(b.balance * s.exchangeRate),
             receivableAtCurrentRate: round(b.balance * rateOf(pos.currency)),
-            forexGainLoss: round(b.balance * rateOf(pos.currency) - b.balance * (order.exchangeRate ?? 1)),
+            forexGainLoss: round(b.balance * rateOf(pos.currency) - b.balance * s.exchangeRate),
             receiptCount: settled.length,
             receipts: settled.map((r) => ({
               id: r.id,
               date: r.date,
               ref: r.ref,
-              amount: r.allocations.find((a) => a.orderId === b.orderId)!.amount,
+              amount: r.allocations.find((a) => a.key === b.key)!.amount,
               fullAmount: r.amount,
               spreadAcross: r.allocations.length,
               aimedAtOrder: r.aimedAtOrder,
@@ -507,7 +623,9 @@ router.get(
     rows.sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
     // Built from the very rows above, so the summary bar and the table cannot disagree.
     const forex = receivablesByCurrency(rows as ForexOrderRow[], symbolOf);
-    res.json({ rows, credits, forex });
+    // Under the invoice basis, confirmed-but-unbilled value is shown BESIDE the receivable
+    // rather than inside it. Zero under the order basis, where the order is already the debt.
+    res.json({ rows, credits, forex, basis, orderBookInr });
   })
 );
 
@@ -520,16 +638,16 @@ router.get(
 router.get(
   '/finance/receivables/summary',
   asyncHandler(async (_req, res) => {
-    const { orders, entries, rateOf, symbolOf, ourState } = await financeData();
+    const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
     const rows: ForexOrderRow[] = [];
     for (const buyerId of [...new Set(orders.map((o) => o.buyerId))]) {
-      for (const pos of buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState)) {
+      for (const pos of buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState, basis, invoices)) {
         for (const b of pos.buckets) {
-          const order = pos.orders.find((o) => o.id === b.orderId)!;
-          const snapshotRate = order.exchangeRate ?? 1;
+          const s = pos.subjectOf(b);
+          const snapshotRate = s.exchangeRate;
           const currentRate = rateOf(pos.currency);
           rows.push({
-            orderId: order.id,
+            orderId: s.id,
             currency: pos.currency,
             invoicedFcy: b.gross,
             receivedFcy: b.paid,
@@ -898,19 +1016,21 @@ async function workforceStatementResponse(partyType: 'WORKER' | 'CONTRACTOR' | '
 /** Headline money totals, shared by the summary endpoint and the dashboard. */
 async function financeTotals() {
   {
-    const [{ orders, entries, rateOf, symbolOf, ourState }, workforce] = await Promise.all([financeData(), buildWorkforceContext()]);
+    const [{ orders, entries, rateOf, symbolOf, ourState, basis, invoices }, workforce] = await Promise.all([financeData(), buildWorkforceContext()]);
 
     let invoicedInr = 0;
     let receivableInr = 0;
     let buyerCreditInr = 0;
+    let orderBookInr = 0;
     for (const buyerId of [...new Set(orders.map((o) => o.buyerId))]) {
-      for (const pos of buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState)) {
-        // Per ORDER, at the rate that order was booked at — not the first order's rate
+      for (const pos of buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState, basis, invoices)) {
+        orderBookInr += pos.orderBook * pos.exchangeRate;
+        // Per DOCUMENT, at the rate that document was booked at — not the first order's rate
         // applied to the whole currency. Two USD orders booked at 82 and 84 were being
         // valued as if both were 82, so the dashboard disagreed with /finance/receivables
         // and with the exposure card, which both convert bucket by bucket.
         for (const b of pos.buckets) {
-          const orderRate = pos.orders.find((o) => o.id === b.orderId)?.exchangeRate ?? rateOf(pos.currency);
+          const orderRate = pos.subjectOf(b).exchangeRate || rateOf(pos.currency);
           invoicedInr += b.gross * orderRate;
           // Clamped exactly as payables are below: one buyer's credit — or a mistyped
           // discount that drove an order negative — must not offset another buyer's
@@ -954,6 +1074,10 @@ async function financeTotals() {
       receivedInr: round(invoicedInr - receivableInr),
       receivableInr: round(receivableInr),
       buyerCreditInr: round(buyerCreditInr),
+      /** Which question `receivableInr` answers — see AppSetting.receivableBasis. */
+      receivableBasis: basis,
+      /** Confirmed but not yet billed. Beside the receivable, never inside it. */
+      orderBookInr: round(orderBookInr),
       jobworkAccrued,
       jobworkPaid: round(jobworkPaid),
       jobworkDue,
@@ -981,11 +1105,11 @@ router.get(
 router.get(
   '/finance/parties',
   asyncHandler(async (_req, res) => {
-    const { orders, entries, rateOf, symbolOf, ourState } = await financeData();
+    const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
     const out: any[] = [];
 
     for (const buyerId of [...new Set(orders.map((o) => o.buyerId))]) {
-      const positions = buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState);
+      const positions = buyerPositions(orders, entries, buyerId, rateOf, symbolOf, ourState, basis, invoices);
       const buyer = positions.find((p) => p.orders.length)?.orders[0].buyer;
       if (!buyer) continue;
       out.push({
@@ -993,9 +1117,9 @@ router.get(
         partyId: buyerId,
         name: buyer.name,
         code: buyer.code,
-        // Bucket by bucket, at each order's own rate — see financeTotals().
+        // Bucket by bucket, at each document's own rate — see financeTotals().
         owesUs: round(
-          positions.reduce((a, p) => a + p.buckets.reduce((b, k) => b + Math.max(k.balance, 0) * (p.orders.find((o) => o.id === k.orderId)?.exchangeRate ?? rateOf(p.currency)), 0), 0)
+          positions.reduce((a, p) => a + p.buckets.reduce((b, k) => b + Math.max(k.balance, 0) * (p.subjectOf(k).exchangeRate || rateOf(p.currency)), 0), 0)
         ),
         weOwe: 0,
         credit: round(positions.reduce((a, p) => a + p.credit * rateOf(p.currency), 0)),
@@ -1074,7 +1198,7 @@ router.get(
         partyName: z.string().optional(),
       })
       .parse(req.query);
-    const { orders, entries, rateOf, symbolOf, ourState } = await financeData();
+    const { orders, entries, rateOf, symbolOf, ourState, basis, invoices } = await financeData();
 
     // A worker named by id is derived from attendance and the board. One named only
     // by a typed name is pre-Manforce history and still reads from the ledger below.
@@ -1084,34 +1208,39 @@ router.get(
 
     if (q.partyType === 'BUYER') {
       if (!q.partyId) throw new ApiError(400, 'Which buyer?');
-      const positions = buyerPositions(orders, entries, q.partyId, rateOf, symbolOf, ourState);
+      const positions = buyerPositions(orders, entries, q.partyId, rateOf, symbolOf, ourState, basis, invoices);
       const buyer = positions.find((p) => p.orders.length)?.orders[0].buyer ?? (await prisma.buyer.findUnique({ where: { id: q.partyId } }));
       if (!buyer) throw new ApiError(404, 'Buyer not found.');
 
       const currencies = positions.map((pos) => ({
         currency: pos.currency,
         symbol: pos.symbol,
+        basis: pos.basis,
         invoiced: pos.invoiced,
         received: pos.received,
         balance: pos.balance,
         credit: pos.credit,
+        /** Order book sits below the closing balance as a memo, never inside it. */
+        orderBook: pos.orderBook,
         orders: pos.buckets.map((b) => {
-          const order = pos.orders.find((o) => o.id === b.orderId)!;
-          return { orderId: order.id, orderNumber: order.number, date: order.orderDate, status: order.status, gross: b.gross, paid: b.paid, balance: b.balance };
+          const s = pos.subjectOf(b);
+          return { docKind: s.kind, orderId: s.orderId, orderNumber: s.number, date: s.date, status: s.status, gross: b.gross, paid: b.paid, balance: b.balance };
         }),
         receipts: pos.receipts,
         statement: buildStatement([
           ...pos.buckets.map((b) => {
-            const order = pos.orders.find((o) => o.id === b.orderId)!;
+            const s = pos.subjectOf(b);
+            const order = s.orderId != null ? pos.orders.find((o) => o.id === s.orderId) : undefined;
+            const items = order ? `${order.lines.length} item(s), ${order.lines.reduce((a, l) => a + l.qty, 0)} pcs` : null;
             return {
-              date: order.orderDate,
+              date: s.date,
               type: 'INVOICE' as const,
-              description: `Order ${order.number}`,
-              ref: order.number,
-              orderNumber: order.number,
+              description: s.kind === 'INVOICE' ? `Invoice ${s.number}` : `Order ${s.number}`,
+              ref: s.number,
+              orderNumber: s.orderNumber,
               charge: b.gross,
               settle: 0,
-              detail: `${order.lines.length} item(s), ${order.lines.reduce((a, l) => a + l.qty, 0)} pcs`,
+              detail: items,
             };
           }),
           // A statement only settles what was actually applied; money with nothing

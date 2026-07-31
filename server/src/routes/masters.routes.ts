@@ -7,6 +7,8 @@ import { ALLOWED_VARS } from '../lib/costing';
 import { validateExpr } from '../lib/expr';
 import { CHANNELS, MARKETS } from '../lib/pricing';
 import { ensureCompany } from '../lib/company';
+import { like } from '../lib/search';
+import { trashedNote } from '../lib/references';
 import { imageUploader, keepRealImages, uploadDir } from '../lib/imageUpload';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,7 +86,10 @@ router.delete(
     ]);
     if (orders + proformas + sheets > 0) {
       const bits = [orders && `${orders} order(s)`, proformas && `${proformas} proforma(s)`, sheets && `${sheets} costing sheet(s)`].filter(Boolean).join(', ');
-      throw new ApiError(409, `${cur.code} is used by ${bits}. Deactivate it instead of deleting.`);
+      throw new ApiError(409, `${cur.code} is used by ${bits}.${await trashedNote([
+        { model: 'order', where: { currencyId: id } },
+        { model: 'proforma', where: { currencyId: id } },
+      ])} Deactivate it instead of deleting.`);
     }
     await prisma.currency.delete({ where: { id } });
     res.status(204).end();
@@ -164,7 +169,7 @@ router.delete(
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const inUse = await prisma.product.count({ where: { unitId: id } });
-    if (inUse > 0) throw new ApiError(409, `This unit is used by ${inUse} product(s). Deactivate it instead of deleting.`);
+    if (inUse > 0) throw new ApiError(409, `This unit is used by ${inUse} product(s).${await trashedNote([{ model: 'product', where: { unitId: id } }])} Deactivate it instead of deleting.`);
     await prisma.unit.delete({ where: { id } });
     res.status(204).end();
   })
@@ -200,8 +205,8 @@ const companySchema = z.object({
   iecNo: z.string().nullable().optional(),
   // logoFilename is deliberately NOT here. It is written only by POST /company/logo,
   // which produces the name itself. Accepting it from the client meant an Admin could
-  // point it at `../prisma/dev.db` and then DELETE /company/logo would unlink the
-  // database — and any path would be embedded into every PDF letterhead.
+  // point it at `../prisma/schema.prisma` and then DELETE /company/logo would unlink
+  // that file — and any path would be embedded into every PDF letterhead.
   cinNo: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   email: z.string().email().optional().or(z.literal('')).nullable(),
@@ -282,6 +287,79 @@ router.delete(
 );
 
 // ---------------------------------------------------------------------------
+// Container types
+//
+// Admin-defined DATA, like cost formulas and stage lines — a new box size is a row, not a
+// release. `isActive`, never `deletedAt`: master data already has a way to hide a row.
+// ---------------------------------------------------------------------------
+
+router.get(
+  '/container-types',
+  asyncHandler(async (req, res) => {
+    const activeOnly = String(req.query.activeOnly ?? '') === '1';
+    res.json(
+      await prisma.containerType.findMany({
+        where: activeOnly ? { isActive: true } : undefined,
+        orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+      })
+    );
+  })
+);
+
+const containerTypeSchema = z.object({
+  code: z.string().min(1).max(20),
+  name: z.string().min(1).max(80),
+  /**
+   * Zero means "not a container" — an LCL part load — and `containerFit` treats it as having
+   * no limit to exceed rather than as a box that everything overflows.
+   */
+  capacityCbm: z.number().nonnegative().default(0),
+  payloadKg: z.number().nonnegative().default(0),
+  sortOrder: z.number().int().optional().default(0),
+  isActive: z.boolean().optional().default(true),
+});
+
+router.post(
+  '/container-types',
+  requireRole('Manager'),
+  asyncHandler(async (req, res) => {
+    const data = containerTypeSchema.parse(req.body);
+    res.status(201).json(await prisma.containerType.create({ data: { ...data, code: data.code.toUpperCase() } }));
+  })
+);
+
+router.put(
+  '/container-types/:id',
+  requireRole('Manager'),
+  asyncHandler(async (req, res) => {
+    const data = containerTypeSchema.partial().parse(req.body);
+    res.json(
+      await prisma.containerType.update({
+        where: { id: Number(req.params.id) },
+        data: { ...data, ...(data.code ? { code: data.code.toUpperCase() } : {}) },
+      })
+    );
+  })
+);
+
+/** Report what references it rather than letting a foreign key surface as a 500. */
+router.delete(
+  '/container-types/:id',
+  requireRole('Admin'),
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const existing = await prisma.containerType.findUnique({ where: { id } });
+    if (!existing) throw new ApiError(404, 'Container type not found.');
+    const used = await prisma.shipmentContainer.count({ where: { containerTypeId: id } });
+    if (used > 0) {
+      throw new ApiError(409, `${existing.code} is on ${used} container(s) already. Mark it inactive instead — the shipments that used it must keep their capacities.`);
+    }
+    await prisma.containerType.delete({ where: { id } });
+    res.status(204).end();
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Buyers
 // ---------------------------------------------------------------------------
 
@@ -291,7 +369,7 @@ router.get(
     const q = (req.query.q as string | undefined)?.trim();
     res.json(
       await prisma.buyer.findMany({
-        where: q ? { OR: [{ name: { contains: q } }, { code: { contains: q } }] } : undefined,
+        where: q ? { OR: [{ name: like(q) }, { code: like(q) }] } : undefined,
         orderBy: { name: 'asc' },
       })
     );
@@ -376,7 +454,11 @@ router.delete(
     ]);
     if (orders + proformas + products + ledger > 0) {
       const bits = [orders && `${orders} order(s)`, proformas && `${proformas} proforma(s)`, products && `${products} product link(s)`, ledger && `${ledger} money entry/entries`].filter(Boolean).join(', ');
-      throw new ApiError(409, `${buyer.name} has ${bits}. Deactivate them instead of deleting.`);
+      throw new ApiError(409, `${buyer.name} has ${bits}.${await trashedNote([
+        { model: 'order', where: { buyerId: id } },
+        { model: 'proforma', where: { buyerId: id } },
+        { model: 'ledgerEntry', where: { buyerId: id } },
+      ])} Deactivate them instead of deleting.`);
     }
     await prisma.buyer.delete({ where: { id } });
     res.status(204).end();
@@ -436,7 +518,13 @@ router.delete(
     const inUse = await prisma.product.count({
       where: { OR: [{ itemTypeId: id }, { productTypeId: id }, { sizeId: id }, { colourId: id }, { materialId: id }, { finishId: id }] },
     });
-    if (inUse > 0) throw new ApiError(409, `"${attr.value}" is used by ${inUse} product(s). Deactivate it instead of deleting.`);
+    if (inUse > 0)
+      throw new ApiError(
+        409,
+        `"${attr.value}" is used by ${inUse} product(s).${await trashedNote([
+          { model: 'product', where: { OR: [{ itemTypeId: id }, { productTypeId: id }, { sizeId: id }, { colourId: id }, { materialId: id }, { finishId: id }] } },
+        ])} Deactivate it instead of deleting.`
+      );
     await prisma.attributeValue.delete({ where: { id } });
     res.status(204).end();
   })

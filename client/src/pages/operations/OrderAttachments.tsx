@@ -120,7 +120,7 @@ export default function OrderAttachments({ orderId, orderNumber }: { orderId: nu
                 Attach files
               </Button>
             </Upload>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               PDF, Word, Excel, images, CSV, text, ZIP, DWG, EML · up to 25 MB each
             </Text>
           </Space>
@@ -206,7 +206,7 @@ export default function OrderAttachments({ orderId, orderNumber }: { orderId: nu
             ]}
           />
         )}
-        <Text type="secondary" style={{ fontSize: 11 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
           Attached to {orderNumber}. Files are stored with the app and served only to signed-in users.
         </Text>
       </Space>

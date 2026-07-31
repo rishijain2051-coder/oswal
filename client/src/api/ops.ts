@@ -615,6 +615,10 @@ export interface Payable {
 }
 
 export interface FinanceSummary {
+  /** Which question `receivableInr` answers — see AppSetting.receivableBasis. */
+  receivableBasis?: 'ORDER' | 'INVOICE';
+  /** Confirmed but not yet billed. Beside the receivable, never inside it. */
+  orderBookInr?: number;
   invoicedInr: number;
   receivedInr: number;
   receivableInr: number;
@@ -780,7 +784,11 @@ export const usePartyStatement = (partyType?: PartyType, partyId?: number | stri
 export const useOpsDashboard = () => useQuery({ queryKey: ['ops-dashboard'], queryFn: () => get<OpsDashboard>('/ops/dashboard') });
 
 /** Every query key that a movement or a money entry can invalidate. */
-export const OPS_KEYS = [['orders'], ['order'], ['ops-dashboard'], ['receivables'], ['payables'], ['finance-summary'], ['finance-parties'], ['statement'], ['payments'], ['stock-txns'], ['finance-receivables-summary'], ['delivery-status']];
+// `order-fulfilment` is in SALES_KEYS as well, and belongs in both: packing and shipping
+// obviously move it, but so does a board clearance, because the board's DONE bucket is what
+// finished stock is derived from. Listed here, completing a piece refreshes what the order
+// page says is ready to pack.
+export const OPS_KEYS = [['orders'], ['order'], ['order-fulfilment'], ['ops-dashboard'], ['receivables'], ['payables'], ['finance-summary'], ['finance-parties'], ['statement'], ['payments'], ['stock-txns'], ['finance-receivables-summary'], ['delivery-status']];
 
 /** Upload hand-over photos onto a movement. */
 export async function uploadMovePhotos(moveId: number, files: File[]): Promise<Order> {

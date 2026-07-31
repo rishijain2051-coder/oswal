@@ -3,12 +3,13 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useAttributes, useBuyers, useMeta, useUnits } from '../../../api/hooks';
 import { useStageLines } from '../../../api/ops';
 import type { WizardDraft } from './draft';
+import { CBM_PER_CUBIC_INCH, round4 } from '../../../util/shipping';
 
 const { Text } = Typography;
 
-// CBM (m³) per cubic inch — used to auto-calculate packing volumes.
-const CBM_PER_CUBIC_INCH = 0.0000163871;
-const round4 = (v: number) => Math.round(v * 10000) / 10000;
+// CBM per cubic inch and the 4-dp rounding come from the shipping engine, so the volume
+// shown here and the carton volume the packing screen computes can never disagree. It is
+// defined ONCE, in the mirrored pair — see client/src/util/shipping.ts.
 
 // Hoisted (module-scope) so it is NOT recreated on every keystroke — that was
 // causing inputs to remount and steal focus back to the first field.

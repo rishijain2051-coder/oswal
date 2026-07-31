@@ -56,6 +56,8 @@ export interface CostLineQuery {
 }
 
 export interface AppSettings {
+  /** ORDER (the default) or INVOICE — see the Sales tab in Master Data. */
+  receivableBasis?: 'ORDER' | 'INVOICE';
   id: number;
   suggestionWindowDays: number;
   outlierPct: number;

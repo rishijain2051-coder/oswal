@@ -21,6 +21,104 @@ body {
   box-shadow: 0 10px 28px rgba(62, 39, 35, 0.18);
 }
 
+/* The menu scrolls on its own now, so it gets its own scrollbar. Left at the browser
+   default it is a wide light-grey bar down the middle of a dark brown panel. */
+.app-sider {
+  scrollbar-width: thin;
+  scrollbar-color: #8d6e63 transparent;
+}
+.app-sider::-webkit-scrollbar {
+  width: 6px;
+}
+.app-sider::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-sider::-webkit-scrollbar-thumb {
+  background: #7a5b50;
+  border-radius: 3px;
+}
+.app-sider::-webkit-scrollbar-thumb:hover {
+  background: #a1887f;
+}
+
+/* Master Data's left tab rail: keep the section list narrow so the panel beside it
+   still has room for a wide table, and give the labels somewhere to breathe. */
+.masters-tabs > .ant-tabs-nav {
+  min-width: 156px;
+}
+.masters-tabs > .ant-tabs-nav .ant-tabs-tab {
+  padding: 7px 14px;
+  margin: 1px 0 !important;
+  border-radius: 6px 0 0 6px;
+}
+.masters-tabs > .ant-tabs-nav .ant-tabs-tab-active {
+  background: #f7f3f1;
+}
+.masters-tabs > .ant-tabs-content-holder {
+  padding-left: 18px;
+}
+
+/* ---------------------------------------------------------------------------
+   Status tag legibility.
+
+   Ant's preset tags paint their -6 shade on their -1 shade, which at the 12px they
+   are used at lands between 2.7:1 and 3.4:1 — under the 4.5:1 needed for small text,
+   and the first thing to disappear on a factory monitor in daylight. The background
+   is kept (it is what makes the tags scannable) and only the text is pushed to the
+   -8/-9 shade, which clears the bar without changing the colour language.
+   --------------------------------------------------------------------------- */
+.ant-tag-red,
+.ant-tag-red a,
+.ant-tag-red a:hover {
+  color: #a8071a !important;
+}
+.ant-tag-volcano {
+  color: #ad2102 !important;
+}
+.ant-tag-orange {
+  color: #ad4e00 !important;
+}
+.ant-tag-gold {
+  color: #874d00 !important;
+}
+.ant-tag-yellow {
+  color: #876800 !important;
+}
+.ant-tag-lime {
+  color: #3f6600 !important;
+}
+.ant-tag-green {
+  color: #237804 !important;
+}
+.ant-tag-cyan {
+  color: #006d75 !important;
+}
+.ant-tag-blue {
+  color: #0050b3 !important;
+}
+.ant-tag-geekblue {
+  color: #10239e !important;
+}
+.ant-tag-purple {
+  color: #391085 !important;
+}
+.ant-tag-magenta {
+  color: #9e1068 !important;
+}
+
+/* Ant's badge paints white on red-5, which is 3.3:1 — under the bar for the small
+   numeral it exists to show. One shade deeper carries white cleanly. */
+.ant-badge-count {
+  background: #cf1322 !important;
+}
+
+/* The percentage printed inside a progress ring/bar uses green-5 on white (2.3:1) once it
+   reaches 100%. Same reasoning as the tags: keep the bar's colour, darken only the text. */
+.ant-progress-status-success .ant-progress-text,
+.ant-progress-text {
+  color: rgba(0, 0, 0, 0.72) !important;
+}
+
 .brand-title {
   color: #fff;
   font-weight: 700;
@@ -106,33 +204,38 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: #efebe9;
-  color: #6d4c41;
-  font-size: 10px;
+  color: #5d4037;
+  font-size: 11px;
   font-weight: 700;
   flex: none;
 }
 .board-cell-name {
-  font-size: 11.5px;
+  font-size: 12px;
   color: #6b5b54;
   font-weight: 600;
   line-height: 1.25;
 }
 .board-cell-qty {
-  font-size: 23px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.1;
-  color: #cfc4bf;
+  /* 24px so the large-text contrast threshold applies, and a darker grey than before:
+     an empty bucket should read as empty, not as absent. */
+  color: #8a7d77;
   margin: 2px 0 3px;
 }
 .board-cell.is-filled .board-cell-qty {
   color: #4e342e;
 }
 .board-cell-done.is-filled .board-cell-qty {
-  color: #389e0d;
+  /* Same green as every other "finished"/"received" figure in the app. The lighter
+     green-6 only just cleared the contrast bar at this size and failed it everywhere
+     smaller, so one darker green is used throughout rather than two that disagree. */
+  color: #237804;
 }
 .board-cell-foot {
   display: flex;
@@ -148,7 +251,8 @@ body {
 }
 .board-arrow {
   align-self: center;
-  color: #c9bab3;
+  /* The arrow says which way pieces travel, so it has to be legible, not a hairline. */
+  color: #6b5b54;
   font-size: 17px;
   flex: none;
   padding: 0 1px;

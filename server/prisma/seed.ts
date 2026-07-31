@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { BUILTIN_METHODS } from '../src/lib/costing';
+import { BUILTIN_CONTAINER_TYPES } from '../src/lib/shipping';
 import { migrateTypedWorkers, seedManforceDefaults } from './manforceSeed';
 import { ensureCompany } from '../src/lib/company';
 
@@ -252,9 +253,30 @@ async function main() {
     { key: 'DPI', prefix: 'DPI', useYear: true },
     { key: 'DORD', prefix: 'DORD', useYear: true },
     { key: 'OP', prefix: 'OP', useYear: false },
+    // Invoices carry the year, exactly as the PI/ORD series do — an invoice series is
+    // quoted by financial year. Export and domestic are numbered independently, the same
+    // split as PI/DPI. These MUST match YEAR_KEYS in lib/numbering.ts.
+    { key: 'INV', prefix: 'INV', useYear: true },
+    { key: 'DINV', prefix: 'DINV', useYear: true },
+    // Shipments and packing lists are internal handles, so they stay flat.
+    { key: 'SHP', prefix: 'SHP', useYear: false },
+    { key: 'PKL', prefix: 'PKL', useYear: false },
   ];
   for (const s of sequences) {
     await prisma.docSequence.upsert({ where: { key: s.key }, update: { prefix: s.prefix, useYear: s.useYear }, create: s });
+  }
+
+  // The boxes an exporter books. Admin-defined DATA, seeded from the shipping engine the
+  // same way BUILTIN_METHODS seeds the cost formulas — a new box size is a row, not a
+  // release. Configuration, so a wipe leaves it alone.
+  for (const c of BUILTIN_CONTAINER_TYPES) {
+    await prisma.containerType.upsert({
+      where: { code: c.code },
+      // Only the description is refreshed. Capacities are deliberately NOT overwritten:
+      // a line's own limits differ, and re-running the seed must not undo the Admin's edit.
+      update: { name: c.name, sortOrder: c.sortOrder },
+      create: { ...c },
+    });
   }
 
   const suppliers = [

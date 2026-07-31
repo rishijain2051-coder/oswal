@@ -13,7 +13,7 @@ export default function ProductModuleHome() {
     <div>
       <Breadcrumb
         style={{ marginBottom: 16 }}
-        items={[{ title: <Link to="/"><HomeOutlined /></Link> }, { title: 'Product Management' }]}
+        items={[{ title: <Link to="/"><HomeOutlined /></Link> }, { title: 'Products' }]}
       />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>

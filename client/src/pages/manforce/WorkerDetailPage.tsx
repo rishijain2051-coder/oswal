@@ -153,7 +153,7 @@ export default function WorkerDetailPage() {
           message={`Paid through ${w.contractor?.name}`}
           description="Everything this worker earns rolls into that contractor's balance, and the contractor is who gets paid. The figures below explain their share of it."
           action={
-            <Button size="small" onClick={() => navigate(`/operations/payments/contractor/${w.contractorId}`)}>
+            <Button size="small" onClick={() => navigate(`/finance/payments/contractor/${w.contractorId}`)}>
               Contractor statement
             </Button>
           }
@@ -183,7 +183,7 @@ export default function WorkerDetailPage() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Paid out (₹)" value={num(p.paid + p.advanced, 0)} valueStyle={{ color: '#389e0d' }} />
+            <Statistic title="Paid out (₹)" value={num(p.paid + p.advanced, 0)} valueStyle={{ color: '#237804' }} />
             <Text type="secondary" style={{ fontSize: 12 }}>
               wages {num(p.paid, 0)} · advances {num(p.advanced, 0)}
             </Text>
@@ -192,7 +192,7 @@ export default function WorkerDetailPage() {
         <Col xs={12} md={6}>
           <Card size="small">
             <Tooltip title="What they can be handed today, after each advance's monthly recovery is taken out of their earnings.">
-              <Statistic title="Due now (₹)" value={num(p.dueNow, 0)} valueStyle={{ color: p.dueNow > 0 ? '#cf1322' : '#389e0d' }} />
+              <Statistic title="Due now (₹)" value={num(p.dueNow, 0)} valueStyle={{ color: p.dueNow > 0 ? '#cf1322' : '#237804' }} />
             </Tooltip>
             <Text type="secondary" style={{ fontSize: 12 }}>
               less deductions {num(p.deducted, 0)} · statutory {num(p.statutoryDeducted, 0)}
@@ -517,7 +517,7 @@ export default function WorkerDetailPage() {
                           <div key={d.id} style={{ textAlign: 'center' }}>
                             <Image src={d.url} width={110} />
                             <br />
-                            <Text type="secondary" style={{ fontSize: 11 }}>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
                               {d.label || d.originalName}
                             </Text>
                             {canManage && (

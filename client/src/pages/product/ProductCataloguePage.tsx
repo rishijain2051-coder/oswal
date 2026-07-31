@@ -42,7 +42,7 @@ export default function ProductCataloguePage() {
         style={{ marginBottom: 16 }}
         items={[
           { title: <Link to="/"><HomeOutlined /></Link> },
-          { title: <Link to="/products">Product Management</Link> },
+          { title: <Link to="/products">Products</Link> },
           { title: 'Product Catalogue' },
         ]}
       />
@@ -51,7 +51,17 @@ export default function ProductCataloguePage() {
           <Title level={3} style={{ margin: 0 }}>Product Catalogue</Title>
           <Text type="secondary">Tap any product to see its full specs. Click through — no prices here.</Text>
         </div>
-        <Input.Search allowClear placeholder="Search code / name" style={{ width: 260 }} onChange={(e) => setQ(e.target.value)} />
+        {/* A filter box needs an id/name for the browser to identify it, and
+            autoComplete="off" because a search term is not data worth remembering. */}
+        <Input.Search
+          id="catalogue-search"
+          name="catalogue-search"
+          autoComplete="off"
+          allowClear
+          placeholder="Search code / name"
+          style={{ width: 260 }}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
 
       {isLoading ? (

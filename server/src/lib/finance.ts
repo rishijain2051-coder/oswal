@@ -16,7 +16,7 @@
  */
 import { round } from './costing';
 import { buildBoard, clearances, type MoveRow, type StageRow } from './production';
-import { documentValueOf, type PricedCharge, type PricedLine } from './pricing';
+import { documentValueOf, lineNet, type PricedCharge, type PricedLine } from './pricing';
 
 // ---------------------------------------------------------------------------
 // FIFO allocation
@@ -30,6 +30,12 @@ export interface Bucket {
   date: Date | string;
   /** Total owed on this bucket before any payment is applied. */
   gross: number;
+  /**
+   * Set instead of `orderId` when the debt is an INVOICE rather than an order — see
+   * `AppSetting.receivableBasis`. An invoice may span several orders, so it cannot carry
+   * a single `orderId` without lying about which one it is.
+   */
+  invoiceId?: number | null;
 }
 
 export interface PaymentRow {
@@ -38,6 +44,8 @@ export interface PaymentRow {
   amount: number;
   /** The order the payment was aimed at, if any. Honoured before the spill-over. */
   orderId?: number | null;
+  /** The invoice it was aimed at, under the invoice basis. Same meaning, same precedence. */
+  invoiceId?: number | null;
 }
 
 export interface Allocation {
@@ -99,10 +107,17 @@ export function allocateFifo(buckets: Bucket[], payments: PaymentRow[]): Allocat
       else allocations.push({ key: bucket.key, orderId: bucket.orderId, label: bucket.label, amount });
     };
 
-    if (p.orderId != null) {
-      const aimed = ordered.find((b) => b.orderId === p.orderId);
-      if (aimed) apply(aimed);
-    }
+    // What the operator SAID this money was for, settled first.
+    //
+    // A receipt may name BOTH — recorded against an invoice, which was itself raised against
+    // an order — so the invoice is tried first and the order is a fallback rather than an
+    // alternative. Treating them as either/or would drop the order aim the moment the Admin
+    // switched the basis back to ORDER, silently re-spreading money that had been pointed
+    // somewhere deliberately.
+    const aimed =
+      (p.invoiceId != null ? ordered.find((b) => b.invoiceId === p.invoiceId) : undefined) ??
+      (p.orderId != null ? ordered.find((b) => b.orderId === p.orderId) : undefined);
+    if (aimed) apply(aimed);
     for (const b of ordered) apply(b);
 
     results.push({ paymentId: p.id, allocations, unallocated: left });
@@ -151,10 +166,44 @@ export interface FinanceEntryLike {
   currency?: string | null;
   date: Date | string;
   orderId?: number | null;
+  invoiceId?: number | null;
   supplierId?: number | null;
   buyerId?: number | null;
   partyName: string;
 }
+
+/**
+ * An invoice as the money layer sees it. Satisfies `DocumentLike`, so `documentValueOf()`
+ * prices it with no change to pricing.ts — which is the point of the invoice storing no
+ * total of its own.
+ */
+export interface FinanceInvoiceLike {
+  id: number;
+  number: string;
+  buyerId: number;
+  status: string;
+  invoiceDate: Date | string;
+  exchangeRate: number | null;
+  currency?: { code: string; symbol: string } | null;
+  /**
+   * Lines carry `orderId` so a receipt can be attributed back to the orders an invoice
+   * covers. The loader fills it in from `InvoiceLine.orderLineId`.
+   */
+  lines: (PricedLine & { orderId?: number | null })[];
+  charges?: PricedCharge[] | null;
+  /**
+   * `name`/`code` are carried so a page can name the party even when the buyer has no live
+   * order in this invoice's currency — otherwise a receivables row for a buyer whose only
+   * orders sit in another currency would render with a blank name.
+   */
+  buyer?: { market?: string | null; state?: string | null; name?: string; code?: string } | null;
+  taxMarket?: string | null;
+  taxBuyerState?: string | null;
+  taxCompanyState?: string | null;
+}
+
+export const RECEIVABLE_BASES = ['ORDER', 'INVOICE'] as const;
+export type ReceivableBasis = (typeof RECEIVABLE_BASES)[number];
 
 export interface FinanceContext {
   /** Allocated receipts per order, in that order's own currency. */
@@ -175,6 +224,33 @@ export interface FinanceContext {
    * way. Loaded once per request alongside the rest of it.
    */
   companyState: string | null;
+
+  /**
+   * What made the buyer owe money — see `AppSetting.receivableBasis`. Carried on the
+   * context so every reader answers the same question; a route that decided for itself
+   * would put the order page and the Payments page on different bases.
+   */
+  basis: ReceivableBasis;
+
+  /**
+   * Under the INVOICE basis: what FIFO actually settled, per invoice.
+   *
+   * THIS IS THE AUTHORITY. A party balance, a statement row or a receivables figure is
+   * computed from these, never from `received` below — because an invoice may span several
+   * orders, and splitting it back across them is an attribution, not an allocation.
+   */
+  invoiceReceived: Map<number, number>;
+
+  /** Per order: how much of its value has been invoiced. */
+  invoicedValue: Map<number, number>;
+
+  /**
+   * Per order: value confirmed but not yet invoiced. Under the INVOICE basis this is NOT a
+   * receivable and is deliberately kept out of the buckets — it is the order book, shown
+   * beside the receivable rather than inside it. Zero under the ORDER basis, where the
+   * order itself is already the debt.
+   */
+  orderBook: Map<number, number>;
 }
 
 const bump = (m: Map<number, number>, k: number, v: number) => m.set(k, round((m.get(k) ?? 0) + v));
@@ -187,16 +263,73 @@ const bump = (m: Map<number, number>, k: number, v: number) => m.set(k, round((m
 const fin = (v: number | null | undefined) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 /**
+ * Split what an invoice has been paid across the orders it bills, weighted by what each
+ * order's lines are worth.
+ *
+ * This is an ATTRIBUTION, not an allocation. The allocation happened once, against the
+ * invoice; this only says which order to colour on a page. It is weighted by `lineNet()` —
+ * the same function that prices the line — and the rounding remainder is given to the
+ * largest share, so the parts always add back to exactly what was settled. verify.ts
+ * asserts that identity, because a split that loses a paisa would make an order page
+ * disagree with the Payments page by that paisa forever.
+ */
+function attributeToOrders(inv: FinanceInvoiceLike, settled: number): Map<number, number> {
+  const out = new Map<number, number>();
+  if (settled <= 0) return out;
+
+  const weights = new Map<number, number>();
+  for (const l of inv.lines) {
+    if (l.orderId == null) continue;
+    weights.set(l.orderId, round((weights.get(l.orderId) ?? 0) + lineNet(l)));
+  }
+  const ids = [...weights.keys()];
+  if (ids.length === 0) return out;
+  if (ids.length === 1) {
+    out.set(ids[0], round(settled));
+    return out;
+  }
+
+  const total = ids.reduce((a, id) => a + (weights.get(id) ?? 0), 0);
+  if (total <= 0) {
+    // Every line fully discounted, yet money arrived. Rather than divide by zero, give it
+    // all to one order — an even split would be no more truthful and harder to explain.
+    out.set(ids[0], round(settled));
+    return out;
+  }
+
+  let running = 0;
+  for (const id of ids) {
+    const share = round((settled * (weights.get(id) ?? 0)) / total);
+    out.set(id, share);
+    running = round(running + share);
+  }
+  // The remainder goes to the biggest share, so the parts sum to the whole exactly.
+  const drift = round(settled - running);
+  if (drift !== 0) {
+    const biggest = ids.reduce((a, b) => ((weights.get(b) ?? 0) > (weights.get(a) ?? 0) ? b : a));
+    out.set(biggest, round((out.get(biggest) ?? 0) + drift));
+  }
+  return out;
+}
+
+/**
  * Allocate every payment across everything outstanding, once, and index the result
  * by order. `jobworkPerOrder` comes from the board (pieces cleared × rate).
+ *
+ * `opts.basis` decides what a buyer's debt IS: their orders (as it always has been) or
+ * their invoices. It is applied HERE and nowhere else — a route that branched on it
+ * separately would be a second source of truth, and the order page and the Payments page
+ * would disagree the moment one of them was missed.
  */
 export function buildFinanceContext(
   orders: FinanceOrderLike[],
   entries: FinanceEntryLike[],
   jobworkPerOrder: Map<number, Map<number, number>>,
   /** Our own state, for the CGST+SGST vs IGST decision on domestic orders. */
-  companyState?: string | null
+  companyState?: string | null,
+  opts?: { basis?: ReceivableBasis; invoices?: FinanceInvoiceLike[] }
 ): FinanceContext {
+  const basis: ReceivableBasis = opts?.basis === 'INVOICE' ? 'INVOICE' : 'ORDER';
   const ctx: FinanceContext = {
     received: new Map(),
     buyerCredit: new Map(),
@@ -207,17 +340,81 @@ export function buildFinanceContext(
     wagesBilled: new Map(),
     wagesPaid: new Map(),
     companyState: companyState ?? null,
+    basis,
+    invoiceReceived: new Map(),
+    invoicedValue: new Map(),
+    orderBook: new Map(),
   };
   const live = orders.filter((o) => o.status !== 'Cancelled');
+  /**
+   * Only an ISSUED invoice is money owed.
+   *
+   * A DRAFT has not been sent to anybody, so it can be neither a debt nor a reduction of
+   * the order book — counting it would make a receivable appear the moment somebody started
+   * typing. A CANCELLED one keeps its number, because a gap in an invoice series is a
+   * compliance problem, but stops being a debt exactly as a cancelled order does.
+   */
+  const liveInvoices = (opts?.invoices ?? []).filter((i) => i.status === 'ISSUED');
 
-  // --- buyers: their orders are the debts, per currency ---------------------
-  for (const buyerId of [...new Set(live.map((o) => o.buyerId))]) {
+  // --- what has been invoiced, and what is still only ordered ---------------
+  for (const inv of liveInvoices) {
+    for (const l of inv.lines) {
+      if (l.orderId == null) continue;
+      bump(ctx.invoicedValue, l.orderId, lineNet(l));
+    }
+  }
+  /**
+   * Order book is only meaningful under the INVOICE basis, so it stays EMPTY under ORDER.
+   *
+   * Under ORDER the order already IS the receivable, and a map that also reported it as
+   * "not yet billed" would invite a page to show the same money twice — once as owed and
+   * once as coming. One map, one meaning.
+   */
+  if (basis === 'INVOICE') {
+    for (const o of live) {
+      const worth = documentValueOf(o, companyState);
+      const invoiced = ctx.invoicedValue.get(o.id) ?? 0;
+      ctx.orderBook.set(o.id, round(Math.max(0, worth - invoiced)));
+    }
+  }
+
+  // --- buyers: their orders (or their invoices) are the debts, per currency --
+  const buyerIds = [...new Set([...live.map((o) => o.buyerId), ...liveInvoices.map((i) => i.buyerId)])];
+  for (const buyerId of buyerIds) {
     const mine = live.filter((o) => o.buyerId === buyerId);
+    const myInvoices = liveInvoices.filter((i) => i.buyerId === buyerId);
     const receipts = entries.filter((e) => e.partyType === 'BUYER' && e.kind === 'PAYMENT' && e.buyerId === buyerId);
-    const codes = [...new Set([...mine.map((o) => o.currency?.code ?? 'INR'), ...receipts.map((r) => r.currency ?? 'INR')])];
+    const debtCodes = basis === 'INVOICE' ? myInvoices.map((i) => i.currency?.code ?? 'INR') : mine.map((o) => o.currency?.code ?? 'INR');
+    const codes = [...new Set([...debtCodes, ...receipts.map((r) => r.currency ?? 'INR')])];
     for (const code of codes) {
-      const ordersInCcy = mine.filter((o) => (o.currency?.code ?? 'INR') === code);
       const inCcy = receipts.filter((r) => (r.currency ?? 'INR') === code);
+      const payments = inCcy.map((e) => ({ id: e.id, date: e.date, amount: e.amount, orderId: e.orderId, invoiceId: e.invoiceId }));
+
+      if (basis === 'INVOICE') {
+        const invoicesInCcy = myInvoices.filter((i) => (i.currency?.code ?? 'INR') === code);
+        const buckets: Bucket[] = invoicesInCcy.map((i) => ({
+          key: `invoice-${i.id}`,
+          orderId: null,
+          invoiceId: i.id,
+          label: i.number,
+          date: i.invoiceDate,
+          // Through the same pricing engine as an order, so an invoice and the order behind
+          // it can never be worth different amounts for the same goods.
+          gross: documentValueOf(i, companyState),
+        }));
+        const result = allocateFifo(buckets, payments);
+        for (const b of result.buckets) {
+          if (b.invoiceId == null) continue;
+          ctx.invoiceReceived.set(b.invoiceId, b.paid);
+          const inv = invoicesInCcy.find((i) => i.id === b.invoiceId);
+          if (!inv) continue;
+          for (const [orderId, amount] of attributeToOrders(inv, b.paid)) bump(ctx.received, orderId, amount);
+        }
+        if (result.credit > 0) ctx.buyerCredit.set(`${buyerId}:${code}`, { buyerId, currency: code, amount: result.credit });
+        continue;
+      }
+
+      const ordersInCcy = mine.filter((o) => (o.currency?.code ?? 'INR') === code);
       const buckets: Bucket[] = ordersInCcy.map((o) => ({
         key: `order-${o.id}`,
         orderId: o.id,
@@ -228,7 +425,7 @@ export function buildFinanceContext(
         // page disagreeing with the order it is settling.
         gross: documentValueOf(o, companyState),
       }));
-      const result = allocateFifo(buckets, inCcy.map((e) => ({ id: e.id, date: e.date, amount: e.amount, orderId: e.orderId })));
+      const result = allocateFifo(buckets, payments);
       for (const b of result.buckets) if (b.orderId != null) ctx.received.set(b.orderId, b.paid);
       if (result.credit > 0) ctx.buyerCredit.set(`${buyerId}:${code}`, { buyerId, currency: code, amount: result.credit });
     }

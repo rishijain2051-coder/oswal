@@ -117,7 +117,7 @@ export default function WorkersPage() {
               if (w.contractorId) return <Text type="secondary">via gang</Text>;
               return (
                 <span>
-                  <b style={{ color: w.money.dueNow > 0 ? '#cf1322' : '#389e0d' }}>₹ {num(w.money.dueNow, 0)}</b>
+                  <b style={{ color: w.money.dueNow > 0 ? '#cf1322' : '#237804' }}>₹ {num(w.money.dueNow, 0)}</b>
                   {w.money.advanceOutstanding > 0 && (
                     <>
                       <br />
@@ -188,7 +188,19 @@ export default function WorkersPage() {
 
       <Card size="small" style={{ margin: '16px 0' }}>
         <Space wrap>
-          <Input allowClear prefix={<SearchOutlined />} placeholder="Name, code, phone…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />
+          {/* id/name so the browser can identify the field; autoComplete off because a
+              filter term is not data worth remembering. */}
+          <Input
+            id="worker-search"
+            name="worker-search"
+            autoComplete="off"
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="Name, code, phone…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            style={{ width: 240 }}
+          />
           <Segmented value={scope} onChange={(v) => setScope(v as 'active' | 'all')} options={[{ label: 'On the books', value: 'active' }, { label: 'Everyone', value: 'all' }]} />
           <Select
             allowClear

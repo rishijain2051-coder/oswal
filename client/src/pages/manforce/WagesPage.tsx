@@ -27,8 +27,7 @@ export default function WagesPage() {
   const canManage = hasRole('Manager');
 
   const [scope, setScope] = useState<'workers' | 'gangs'>('workers');
-  const [payTarget, setPayTarget] = useState<{ type: 'WORKER' | 'CONTRACTOR'; id: number; name: string; due: number } | null>(null);
-  const [form] = Form.useForm();
+  const [payTarget, setPayTarget] = useState<PayTarget | null>(null);
 
   const { data: summary } = useManforceSummary();
   const { data: workers } = useWorkers({ money: '1' });
@@ -71,7 +70,6 @@ export default function WagesPage() {
 
   const openPay = (type: 'WORKER' | 'CONTRACTOR', id: number, name: string, due: number) => {
     setPayTarget({ type, id, name, due });
-    form.setFieldsValue({ amount: due > 0 ? due : undefined, date: dayjs(), ref: '', note: '' });
   };
 
   return (
@@ -100,7 +98,7 @@ export default function WagesPage() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Paid out so far (₹)" value={num(summary?.money.wagesPaid ?? 0, 0)} valueStyle={{ color: '#389e0d' }} />
+            <Statistic title="Paid out so far (₹)" value={num(summary?.money.wagesPaid ?? 0, 0)} valueStyle={{ color: '#237804' }} />
           </Card>
         </Col>
       </Row>
@@ -148,7 +146,7 @@ export default function WagesPage() {
               key: 'due',
               width: 130,
               align: 'right',
-              render: (_, w) => <b style={{ color: w.money!.dueNow > 0 ? '#cf1322' : '#389e0d' }}>{money(w.money!.dueNow, '₹', 0)}</b>,
+              render: (_, w) => <b style={{ color: w.money!.dueNow > 0 ? '#cf1322' : '#237804' }}>{money(w.money!.dueNow, '₹', 0)}</b>,
             },
             {
               title: 'Advance out',
@@ -168,7 +166,7 @@ export default function WagesPage() {
                       Pay
                     </Button>
                   )}
-                  <Button size="small" onClick={() => navigate(`/operations/payments/worker/${w.id}`)}>
+                  <Button size="small" onClick={() => navigate(`/finance/payments/worker/${w.id}`)}>
                     Statement
                   </Button>
                 </Space>
@@ -216,7 +214,7 @@ export default function WagesPage() {
             },
             { title: 'Gang earned', dataIndex: 'accrued', width: 130, align: 'right', render: (v) => money(v, '₹', 0) },
             { title: 'Paid', dataIndex: 'paid', width: 120, align: 'right', render: (v) => money(v, '₹', 0) },
-            { title: 'Balance', dataIndex: 'balance', width: 130, align: 'right', render: (v) => <b style={{ color: v > 0 ? '#cf1322' : '#389e0d' }}>{money(v, '₹', 0)}</b> },
+            { title: 'Balance', dataIndex: 'balance', width: 130, align: 'right', render: (v) => <b style={{ color: v > 0 ? '#cf1322' : '#237804' }}>{money(v, '₹', 0)}</b> },
             {
               title: '',
               key: 'x',
@@ -228,7 +226,7 @@ export default function WagesPage() {
                       Pay
                     </Button>
                   )}
-                  <Button size="small" onClick={() => navigate(`/operations/payments/contractor/${r.partyId}`)}>
+                  <Button size="small" onClick={() => navigate(`/finance/payments/contractor/${r.partyId}`)}>
                     Statement
                   </Button>
                 </Space>
@@ -255,39 +253,52 @@ export default function WagesPage() {
         />
       </Card>
 
-      <Modal
-        open={payTarget != null}
-        title={`Pay ${payTarget?.name ?? ''}`}
-        onCancel={() => setPayTarget(null)}
-        okText="Record payment"
-        confirmLoading={pay.isPending}
-        onOk={() => form.submit()}
-        destroyOnClose
-      >
-        {payTarget && payTarget.due <= 0 && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="Nothing is outstanding"
-            description="Paying anyway leaves them in credit — the amount is carried against future earnings rather than showing as a negative debt."
-          />
-        )}
-        <Form form={form} layout="vertical" onFinish={(v) => pay.mutate(v)}>
-          <Form.Item name="amount" label="Amount (₹)" rules={[{ required: true, message: 'How much?' }]}>
-            <InputNumber min={0.01} style={{ width: '100%' }} autoFocus />
-          </Form.Item>
-          <Form.Item name="date" label="Date" rules={[{ required: true }]}>
-            <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" />
-          </Form.Item>
-          <Form.Item name="ref" label="Reference">
-            <Input placeholder="Voucher or UPI reference" />
-          </Form.Item>
-          <Form.Item name="note" label="Note">
-            <Input.TextArea rows={2} />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {payTarget && <PayPartyModal target={payTarget} saving={pay.isPending} onCancel={() => setPayTarget(null)} onSubmit={(v) => pay.mutate(v)} />}
     </div>
+  );
+}
+
+type PayTarget = { type: 'WORKER' | 'CONTRACTOR'; id: number; name: string; due: number };
+
+/**
+ * Recording a payment against a worker or a gang.
+ *
+ * This is its own component, and the page renders it only while a target is chosen, so
+ * `useForm` and the `<Form>` it belongs to come into existence together. Kept on the page
+ * with the form inside a closed modal, the instance sat unconnected — which is what antd
+ * was warning about, and why seeding the amount from the click handler wrote to nothing
+ * and the field opened blank. Mounting them together also makes `initialValues` the
+ * natural place for the seed: it is evaluated once, on the open.
+ */
+function PayPartyModal({ target, saving, onCancel, onSubmit }: { target: PayTarget; saving: boolean; onCancel: () => void; onSubmit: (v: { amount: number; date?: dayjs.Dayjs; ref?: string; note?: string }) => void }) {
+  const [form] = Form.useForm();
+  return (
+    <Modal open title={`Pay ${target.name}`} onCancel={onCancel} okText="Record payment" confirmLoading={saving} onOk={() => form.submit()}>
+      {target.due <= 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Nothing is outstanding"
+          description="Paying anyway leaves them in credit — the amount is carried against future earnings rather than showing as a negative debt."
+        />
+      )}
+      {/* Seeded with what is actually owed. Left blank when nothing is outstanding,
+          because then there is no figure worth suggesting. */}
+      <Form form={form} layout="vertical" initialValues={{ amount: target.due > 0 ? target.due : undefined, date: dayjs(), ref: '', note: '' }} onFinish={onSubmit}>
+        <Form.Item name="amount" label="Amount (₹)" rules={[{ required: true, message: 'How much?' }]}>
+          <InputNumber min={0.01} style={{ width: '100%' }} autoFocus />
+        </Form.Item>
+        <Form.Item name="date" label="Date" rules={[{ required: true }]}>
+          <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" />
+        </Form.Item>
+        <Form.Item name="ref" label="Reference">
+          <Input placeholder="Voucher or UPI reference" />
+        </Form.Item>
+        <Form.Item name="note" label="Note">
+          <Input.TextArea rows={2} />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }

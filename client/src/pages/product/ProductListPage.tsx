@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import TrashDrawer, { TrashButton } from '../../components/TrashDrawer';
-import { Breadcrumb, Button, Card, Input, Select, Space, Table, Tag, Popconfirm, Typography, App } from 'antd';
+import { Breadcrumb, Button, Card, Input, Select, Space, Table, Tag, Popconfirm, Tooltip, Typography, App } from 'antd';
 import { PlusOutlined, HomeOutlined, EditOutlined, DeleteOutlined, EyeOutlined, ClearOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -95,11 +95,19 @@ export default function ProductListPage() {
       width: 130,
       render: (_, r) => (
         <Space>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/products/${r.id}`)} />
-          {hasRole('Operator') && <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/products/${r.id}/edit`)} />}
+          <Tooltip title="Open this product">
+            <Button size="small" aria-label="Open this product" icon={<EyeOutlined />} onClick={() => navigate(`/products/${r.id}`)} />
+          </Tooltip>
+          {hasRole('Operator') && (
+            <Tooltip title="Edit this product">
+              <Button size="small" aria-label="Edit this product" icon={<EditOutlined />} onClick={() => navigate(`/products/${r.id}/edit`)} />
+            </Tooltip>
+          )}
           {hasRole('Manager') && (
             <Popconfirm title="Delete this product?" onConfirm={() => del.mutate(r.id)} okText="Delete" okButtonProps={{ danger: true }}>
-              <Button size="small" danger icon={<DeleteOutlined />} />
+              <Tooltip title="Move to trash">
+                <Button size="small" danger aria-label="Move this product to the trash" icon={<DeleteOutlined />} />
+              </Tooltip>
             </Popconfirm>
           )}
         </Space>
@@ -113,7 +121,7 @@ export default function ProductListPage() {
         style={{ marginBottom: 16 }}
         items={[
           { title: <Link to="/"><HomeOutlined /></Link> },
-          { title: <Link to="/products">Product Management</Link> },
+          { title: <Link to="/products">Products</Link> },
           { title: 'Product Details' },
         ]}
       />
@@ -133,7 +141,12 @@ export default function ProductListPage() {
 
       <Card size="small" style={{ marginBottom: 16 }}>
         <Space wrap>
+          {/* A filter box needs an id/name for the browser to identify it, and
+              autoComplete="off" because a search term is not data worth remembering. */}
           <Input.Search
+            id="product-list-search"
+            name="product-list-search"
+            autoComplete="off"
             allowClear
             placeholder="Search code / name / alias"
             style={{ width: 240 }}

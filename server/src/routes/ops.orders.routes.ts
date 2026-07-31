@@ -11,10 +11,12 @@ import { loadMethodMap } from '../lib/methods';
 import { round } from '../lib/costing';
 import { buildBoard, expandHops, MOVE_KINDS, validateMove, type MoveRow } from '../lib/production';
 import { loadOrder, loadSerializedOrder, materializeStages, orderInclude, resolveStageLineId, serializeOrders, syncOrderStatus } from '../lib/orderBoard';
+import { shippedQtyByOrderLine } from '../lib/salesBoard';
 import { orderPdf, proformaPdf } from '../lib/docPdf';
 import { CHARGE_KINDS, docKeys, documentTotalsOf, isDomestic, lineGross, lineNet } from '../lib/pricing';
 import { companyState, ensureCompany, type CompanyProfile } from '../lib/company';
 import { assertLive, notDeleted, restore, softDelete } from '../lib/softDelete';
+import { lockOrder } from '../lib/rowLock';
 import { ATTACHMENT_LABELS, attachmentUploader, keepRealDocuments } from '../lib/documentUpload';
 import { DELIVERY_URGENCY, autoSchedule, deliveryStatus } from '../lib/scheduling';
 import { buildEml, mailtoUrl, proformaMail } from '../lib/mailDraft';
@@ -299,7 +301,7 @@ router.put(
     const data = orderSchema.parse(req.body);
     if (data.lines.length === 0) throw new ApiError(400, 'An order needs at least one product line.');
 
-    const existing = await prisma.order.findUnique({ where: { id }, include: { lines: { include: { stages: true, moves: true, product: { select: { factoryCode: true } } } } } });
+    const existing = await prisma.order.findUnique({ where: { id }, select: { number: true, deletedAt: true } });
     if (!existing) throw new ApiError(404, 'Order not found.');
     if (existing.deletedAt) throw new ApiError(409, `${existing.number} is in the trash. Restore it before editing it.`);
 
@@ -314,28 +316,43 @@ router.put(
     // Lines are matched by id and PATCHED — never wiped and rebuilt — so stage
     // snapshots and movement history survive an edit.
     const keptIds = new Set(data.lines.filter((l) => l.id).map((l) => l.id!));
-    for (const line of existing.lines) {
-      if (keptIds.has(line.id)) continue;
-      if (line.moves.length > 0) {
-        throw new ApiError(409, `Cannot remove ${line.product.factoryCode}: it has ${line.moves.length} production movement(s). Undo them first.`);
-      }
-    }
-
-    for (const incoming of data.lines) {
-      if (!incoming.id) continue;
-      const line = existing.lines.find((l) => l.id === incoming.id);
-      if (!line) throw new ApiError(400, `Line ${incoming.id} does not belong to this order.`);
-      const board = buildBoard(line.qty, line.stages as any, line.moves as any);
-      const committed = board.wip + board.done;
-      if (incoming.qty < committed) {
-        throw new ApiError(409, `${line.product.factoryCode}: ${committed} pc(s) are already in production or finished — quantity cannot drop below that.`);
-      }
-      if (incoming.productId !== line.productId && line.moves.length > 0) {
-        throw new ApiError(409, `${line.product.factoryCode}: the product cannot be swapped once production has started.`);
-      }
-    }
 
     await prisma.$transaction(async (tx) => {
+      // LOCKED FIRST. Every check below reads the movement ledger and the writes that
+      // follow depend on what it found, so a clearance landing in between would make the
+      // edit act on a board that no longer exists — a quantity could be lowered past
+      // pieces that had just entered production. See lib/rowLock.ts.
+      if (!(await lockOrder(tx, id))) throw new ApiError(404, 'Order not found.');
+
+      // Read the lines under the lock rather than before it, which is the whole point:
+      // anything fetched earlier is a snapshot from before this route had exclusive use
+      // of the order. These rows are also the `prev` values the change log diffs against.
+      const lines = await tx.orderLine.findMany({
+        where: { orderId: id },
+        include: { stages: true, moves: true, product: { select: { factoryCode: true } } },
+      });
+
+      for (const line of lines) {
+        if (keptIds.has(line.id)) continue;
+        if (line.moves.length > 0) {
+          throw new ApiError(409, `Cannot remove ${line.product.factoryCode}: it has ${line.moves.length} production movement(s). Undo them first.`);
+        }
+      }
+
+      for (const incoming of data.lines) {
+        if (!incoming.id) continue;
+        const line = lines.find((l) => l.id === incoming.id);
+        if (!line) throw new ApiError(400, `Line ${incoming.id} does not belong to this order.`);
+        const board = buildBoard(line.qty, line.stages as any, line.moves as any);
+        const committed = board.wip + board.done;
+        if (incoming.qty < committed) {
+          throw new ApiError(409, `${line.product.factoryCode}: ${committed} pc(s) are already in production or finished — quantity cannot drop below that.`);
+        }
+        if (incoming.productId !== line.productId && line.moves.length > 0) {
+          throw new ApiError(409, `${line.product.factoryCode}: the product cannot be swapped once production has started.`);
+        }
+      }
+
       await tx.order.update({
         where: { id },
         data: {
@@ -364,14 +381,14 @@ router.put(
       await tx.orderCharge.deleteMany({ where: { orderId: id } });
       for (const c of chargeRows(data.charges, domestic)) await tx.orderCharge.create({ data: { orderId: id, ...c } });
 
-      for (const line of existing.lines) {
+      for (const line of lines) {
         if (!keptIds.has(line.id)) await tx.orderLine.delete({ where: { id: line.id } });
       }
 
       for (let i = 0; i < data.lines.length; i++) {
         const l = data.lines[i];
         if (l.id) {
-          const prev = existing.lines.find((x) => x.id === l.id)!;
+          const prev = lines.find((x) => x.id === l.id)!;
           await tx.orderLine.update({ where: { id: l.id }, data: { productId: l.productId, qty: l.qty, unitPrice: l.unitPrice, ...orderLineTax(l, domestic), sortOrder: i } });
           await logChanges(
             tx,
@@ -403,13 +420,57 @@ router.put(
   })
 );
 
+/**
+ * Set a status a HUMAN owns — only `Closed` or `Cancelled`.
+ *
+ * Confirmed / Production / Ready / Shipped are DERIVED from the board and the shipments
+ * (see `impliedOrderStatus`), so setting one by hand is meaningless: the next clearance or
+ * dispatch would overwrite it. The route refuses them with a message that says where they
+ * come from, rather than letting a dropdown offer a choice that does not stick. To leave a
+ * terminal state, use `POST /orders/:id/reopen`.
+ */
 router.patch(
   '/orders/:id/status',
-  canEdit,
+  canManage,
   asyncHandler(async (req, res) => {
-    const { status } = z.object({ status: z.enum(ORDER_STATUSES) }).parse(req.body);
-    await prisma.order.update({ where: { id: Number(req.params.id) }, data: { status } });
-    res.json(await loadSerializedOrder(Number(req.params.id)));
+    const id = Number(req.params.id);
+    const { status } = z.object({ status: z.enum(['Closed', 'Cancelled'] as const) }).parse(req.body);
+    const order = await prisma.order.findUnique({ where: { id }, select: { status: true, number: true, deletedAt: true } });
+    if (!order) throw new ApiError(404, 'Order not found.');
+    if (order.deletedAt) throw new ApiError(409, `${order.number} is in the trash. Restore it first.`);
+    if (order.status === status) return res.json(await loadSerializedOrder(id));
+    await prisma.order.update({ where: { id }, data: { status } });
+    res.json(await loadSerializedOrder(id));
+  })
+);
+
+/**
+ * Leave a terminal state (`Closed` / `Cancelled`) and let the board and shipments decide
+ * the status again — the mirror of `POST /proformas/:id/reopen`.
+ *
+ * Reopening writes `Confirmed` and then re-derives, passing the shipped quantity so a still
+ * fully-shipped order returns to `Shipped` rather than falling back to `Ready`.
+ */
+router.post(
+  '/orders/:id/reopen',
+  canManage,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const order = await prisma.order.findUnique({ where: { id }, select: { status: true, number: true, deletedAt: true } });
+    if (!order) throw new ApiError(404, 'Order not found.');
+    if (order.deletedAt) throw new ApiError(409, `${order.number} is in the trash. Restore it first.`);
+    if (order.status !== 'Closed' && order.status !== 'Cancelled') {
+      throw new ApiError(409, `${order.number} is not closed or cancelled — its status already follows the board.`);
+    }
+    await prisma.$transaction(async (tx) => {
+      // Back to a non-terminal state so `impliedOrderStatus` will restate it, then re-derive
+      // with the shipped figure so a fully-shipped order returns to Shipped.
+      await tx.order.update({ where: { id }, data: { status: 'Confirmed' } });
+      const shipped = await shippedQtyByOrderLine(tx, id);
+      const total = [...shipped.values()].reduce((a, n) => a + n, 0);
+      await syncOrderStatus(tx, id, total);
+    });
+    res.json(await loadSerializedOrder(id));
   })
 );
 
@@ -955,17 +1016,17 @@ router.post(
     const date = body.date ? new Date(body.date) : new Date();
     const comment = body.comment?.trim() || null;
 
-    // The board is read, validated and written inside ONE transaction. Doing the
-    // check outside left a window where two simultaneous clearances of the same
-    // pieces both passed validation and both wrote, driving a stage negative.
-    // SQLite serialises write transactions, so re-reading in here closes it.
+    // The board is read, validated and written inside ONE transaction, and the order is
+    // LOCKED before any of it. Doing the check outside left a window where two
+    // simultaneous clearances of the same pieces both passed validation and both wrote,
+    // driving a stage negative — and on Postgres the transaction alone does not close it,
+    // because two READ COMMITTED reads of the ledger see the same board. See lib/rowLock.
     const result = await prisma.$transaction(async (tx) => {
-      const order = await tx.order.findUnique({ where: { id: orderId }, select: { status: true } });
-      if (!order) throw new ApiError(404, 'Order not found.');
-      if (order.status === 'Cancelled') throw new ApiError(409, 'This order is cancelled — reopen it before moving pieces.');
+      if (!(await lockOrder(tx, orderId))) throw new ApiError(404, 'Order not found.');
 
-      const orderRow = await tx.order.findUnique({ where: { id: orderId }, select: { number: true, deletedAt: true } });
+      const orderRow = await tx.order.findUnique({ where: { id: orderId }, select: { status: true, number: true, deletedAt: true } });
       if (!orderRow) throw new ApiError(404, 'Order not found.');
+      if (orderRow.status === 'Cancelled') throw new ApiError(409, 'This order is cancelled — reopen it before moving pieces.');
       // Pieces cannot move on an order that has left every list and every total.
       if (orderRow.deletedAt) throw new ApiError(409, `${orderRow.number} is in the trash. Restore it before moving pieces.`);
       const lines = await tx.orderLine.findMany({
@@ -1114,8 +1175,12 @@ router.delete(
     if (!move) throw new ApiError(404, 'Movement not found.');
 
     const photos = await prisma.stageMovePhoto.findMany({ where: { moveId: id } });
-    // Re-checked inside the transaction so two simultaneous undos cannot both win.
+    // Re-checked inside the transaction, behind the order's lock, so two simultaneous
+    // undos cannot both win and so an undo cannot race a clearance: without the lock,
+    // reading "the newest movement is #5" and deleting it can interleave with #6 being
+    // appended, leaving a line whose history has a hole in the middle of it.
     await prisma.$transaction(async (tx) => {
+      if (!(await lockOrder(tx, move.orderLine.orderId))) throw new ApiError(404, 'Order not found.');
       const still = await tx.stageMove.findUnique({ where: { id }, select: { id: true } });
       if (!still) throw new ApiError(409, 'That movement has already been undone.');
       const latest = await tx.stageMove.findFirst({ where: { orderLineId: move.orderLineId }, orderBy: { id: 'desc' } });
@@ -1390,9 +1455,9 @@ router.put(
     await assertLive('product', data.lines.map((l) => l.productId).filter((v): v is number => v != null), 'a proforma');
     const currency = data.currencyId ? await prisma.currency.findUnique({ where: { id: data.currencyId } }) : null;
     assertCurrencyForMarket(domestic, currency);
-    // Read BEFORE the transaction: `companyState()` upserts the singleton, and a nested
-    // write inside `$transaction` cannot start until the outer one commits — SQLite
-    // serialises writes, so it simply times out after 5 s.
+    // Read BEFORE the transaction: `companyState()` upserts the singleton, so calling it
+    // inside `$transaction` runs a write on a second connection while this one holds its
+    // locks — which is how it deadlocked and timed out after 5 s.
     const pfState = await companyState();
     await prisma.$transaction(async (tx) => {
       await tx.proforma.update({

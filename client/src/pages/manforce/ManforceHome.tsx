@@ -60,7 +60,7 @@ export default function ManforceHome() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small" hoverable onClick={() => navigate('/manforce/muster')}>
-            <Statistic title="Present today" value={t?.present ?? 0} valueStyle={{ color: '#389e0d' }} />
+            <Statistic title="Present today" value={t?.present ?? 0} valueStyle={{ color: '#237804' }} />
             <Text type="secondary" style={{ fontSize: 12 }}>
               {dayLabel}
               {t && t.absent ? ` · ${t.absent} away` : ''}
@@ -94,7 +94,7 @@ export default function ManforceHome() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Paid out (₹)" value={num(d?.money.wagesPaid ?? 0, 0)} valueStyle={{ color: '#389e0d' }} />
+            <Statistic title="Paid out (₹)" value={num(d?.money.wagesPaid ?? 0, 0)} valueStyle={{ color: '#237804' }} />
             <Text type="secondary" style={{ fontSize: 12 }}>
               wages and advances together
             </Text>

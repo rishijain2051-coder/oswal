@@ -53,7 +53,7 @@ export default function ChangeLogList({ rootType, rootId, what = 'record', compa
               <span>
                 {v}
                 <br />
-                <Text type="secondary" style={{ fontSize: 11 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
                   {ENTITY_LABEL[r.entity] ?? r.entity}
                 </Text>
               </span>

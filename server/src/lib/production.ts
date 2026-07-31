@@ -340,13 +340,44 @@ export function rollUp(boards: LineBoard[]) {
 }
 
 /**
- * Order status that the board implies. Returns null when the current status is
- * one the board must not touch (shipped / closed / cancelled are human decisions).
+ * Order status that the board — and the shipments — imply.
+ *
+ * Returns null when nothing should change, or when the current status is one this must not
+ * touch. `Closed` and `Cancelled` stay human decisions; `Shipped` no longer is, because a
+ * dispatch is a fact and a dropdown was only ever somebody's word for it.
+ *
+ * `shipped` is optional so every existing caller keeps its behaviour exactly: without it
+ * this is the board-only rule it always was.
+ *
+ * A PARTLY shipped order is deliberately left where the board put it — usually `Ready`.
+ * Inventing a fourth state for it would put a status on the page that no report, filter or
+ * PDF knows about, when "Ready, and half of it has gone" is already visible from the
+ * shipped figure beside it.
  */
-export function impliedOrderStatus(current: string, summary: { ordered: number; done: number; wip: number; pending: number }): string | null {
-  if (['Shipped', 'Closed', 'Cancelled'].includes(current)) return null;
+export function impliedOrderStatus(
+  current: string,
+  summary: { ordered: number; done: number; wip: number; pending: number },
+  shipped?: number
+): string | null {
+  if (['Closed', 'Cancelled'].includes(current)) return null;
   if (summary.ordered === 0) return null;
+
+  const gone = shipped ?? 0;
+  // Everything ordered has left the factory. This outranks the board: pieces that have
+  // shipped are finished by definition, so it holds even if a movement is later corrected.
+  if (shipped != null && gone >= summary.ordered) return current === 'Shipped' ? null : 'Shipped';
+
+  // Past this point the board decides — but it must never pull an order BACK out of
+  // Shipped on its own. Only un-shipping it (deleting the dispatch) may do that, which is
+  // why this asks about `shipped` rather than trusting the stored status.
+  if (current === 'Shipped') {
+    if (shipped == null) return null; // caller did not ask about shipping; leave it alone
+    // Genuinely no longer fully shipped — fall through and let the board restate it.
+  }
+
   if (summary.done >= summary.ordered) return current === 'Ready' ? null : 'Ready';
   if (summary.wip > 0 || summary.done > 0) return current === 'Production' ? null : 'Production';
+  // Nothing has moved. Deliberately null rather than 'Confirmed': this function only ever
+  // advanced a status, and an order a human parked somewhere is not the board's business.
   return null;
 }

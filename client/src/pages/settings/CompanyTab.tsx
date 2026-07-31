@@ -117,7 +117,7 @@ export default function CompanyTab() {
               name="state"
               label="State"
               tooltip="Compared with the buyer's state to decide CGST + SGST versus IGST."
-              extra={<Text type="secondary" style={{ fontSize: 11 }}>Must match how you spell it on buyers.</Text>}
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>Must match how you spell it on buyers.</Text>}
             >
               <Input placeholder="Rajasthan" />
             </Form.Item>
@@ -205,7 +205,7 @@ export default function CompanyTab() {
             {data?.logoFilename ? (
               <img src={`/uploads/${data.logoFilename}`} alt="Company logo" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
             ) : (
-              <Text type="secondary" style={{ fontSize: 11, textAlign: 'center', padding: 6 }}>
+              <Text type="secondary" style={{ fontSize: 12, textAlign: 'center', padding: 6 }}>
                 no logo
               </Text>
             )}
@@ -232,7 +232,7 @@ export default function CompanyTab() {
                 </Button>
               </Popconfirm>
             )}
-            <Text type="secondary" style={{ fontSize: 11, maxWidth: 380, display: 'block' }}>
+            <Text type="secondary" style={{ fontSize: 12, maxWidth: 380, display: 'block' }}>
               Printed to the left of the company name on documents. JPEG or PNG appear on the PDF; GIF and WebP are accepted for the screen but the PDF falls back to text, because
               pdfkit can only embed JPEG and PNG. A square-ish image around 300&nbsp;px works best.
             </Text>

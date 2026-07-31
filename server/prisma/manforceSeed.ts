@@ -9,8 +9,8 @@ import { BUILTIN_STATUTORY, dayStart } from '../src/lib/workforce';
 const DEFAULT_TRADES = ['Carpenter', 'Polisher', 'Sander', 'Fitter', 'Packer', 'Helper', 'Supervisor'];
 
 /**
- * Same atomic bump as lib/numbering, on the seed's own client. A read-then-write
- * would let two callers mint the same code, because SQLite takes no lock on the read.
+ * Same atomic bump as lib/numbering, on the seed's own client. A read-then-write would
+ * let two callers mint the same code, because a plain read takes no lock.
  */
 async function nextCode(prisma: PrismaClient, key: string) {
   const seq = await prisma.docSequence.update({ where: { key }, data: { lastNo: { increment: 1 } } });

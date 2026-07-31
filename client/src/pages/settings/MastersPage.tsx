@@ -9,6 +9,7 @@ import StageLinesTab from './StageLinesTab';
 import WorkforceTab from './WorkforceTab';
 import StatutoryTab from './StatutoryTab';
 import SuggestionsTab from './SuggestionsTab';
+import SalesTab from './SalesTab';
 import CurrencyRatesImport from './CurrencyRatesImport';
 import { useCurrencies, useMeta } from '../../api/hooks';
 import { useAuth } from '../../auth/AuthContext';
@@ -141,7 +142,13 @@ export default function MastersPage() {
       <Title level={3}>Master Data</Title>
       <Text type="secondary">These lists power the dropdowns, filters, costing and production routing across the whole ERP.</Text>
       <Card style={{ marginTop: 16 }}>
+        {/* A left rail rather than a top row. Twelve sections do not fit across the top:
+            at 1366px two of them ("Statutory", "Memory") already fell into an overflow
+            "···" menu, so the last two things anybody configures were the two you could
+            not see. Down the side they are all visible at any window width. */}
         <Tabs
+          tabPosition="left"
+          className="masters-tabs"
           items={[
             { key: 'company', label: 'Company', children: <CompanyTab /> },
             { key: 'currencies', label: 'Currencies', children: <CurrenciesTab /> },
@@ -155,6 +162,7 @@ export default function MastersPage() {
             { key: 'working-days', label: 'Working Days', children: <WorkforceTab /> },
             { key: 'statutory', label: 'Statutory', children: <StatutoryTab /> },
             { key: 'suggestions', label: 'Memory', children: <SuggestionsTab /> },
+            { key: 'sales', label: 'Sales', children: <SalesTab /> },
           ]}
         />
       </Card>

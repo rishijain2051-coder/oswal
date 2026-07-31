@@ -7,7 +7,16 @@ build/
 .env
 server/.env
 
-# database
+# database — the development Postgres cluster lives in the repo but is never committed:
+# it is machine-specific binary state, and `npm run pg:start` recreates it from nothing.
+server/.pgdata/
+# a restore moves the cluster it replaced aside rather than deleting it
+server/.pgdata.replaced-*/
+server/uploads.replaced-*/
+# cold backups of the cluster and uploads (npm run db:backup)
+server/backups/
+
+# the SQLite database this project used before Postgres
 *.db
 *.db-journal
 server/prisma/*.db

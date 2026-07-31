@@ -23,15 +23,20 @@ import { ApiError } from './http';
 
 type Tx = Prisma.TransactionClient | PrismaClient;
 
-/** The models that carry `deletedAt`. */
-export const SOFT_MODELS = ['product', 'order', 'proforma', 'ledgerEntry', 'operationSheet'] as const;
+/**
+ * The models that carry `deletedAt`.
+ *
+ * `assertLive` names a row by `factoryCode` for a product and by `number` for everything
+ * else, so a model added here must have one of those.
+ */
+export const SOFT_MODELS = ['product', 'order', 'proforma', 'ledgerEntry', 'operationSheet', 'shipment', 'invoice'] as const;
 export type SoftModel = (typeof SOFT_MODELS)[number];
 
 /**
  * Spread into any `where` that feeds a list or the money engine.
  *
- * `deletedAt: null` rather than a `not` test, because SQLite indexes the null case and
- * it reads as what it means: only live rows.
+ * `deletedAt: null` rather than a `not` test, because an index can satisfy `IS NULL`
+ * directly — Postgres B-trees store nulls — and it reads as what it means: only live rows.
  */
 export const notDeleted = { deletedAt: null } as const;
 

@@ -138,7 +138,7 @@ export default function DeliveryTracker() {
                 render: (v: number, r) => (
                   <Space direction="vertical" size={0} style={{ width: 150 }}>
                     <Progress percent={v} size="small" status={r.deliveryStatus === 'LATE' ? 'exception' : v >= 100 ? 'success' : 'active'} />
-                    <Text type="secondary" style={{ fontSize: 11 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
                       {r.done} of {r.qty} pc done{r.wip > 0 ? `, ${r.wip} moving` : ''}
                     </Text>
                   </Space>
@@ -152,7 +152,7 @@ export default function DeliveryTracker() {
                   v ? (
                     <Space direction="vertical" size={0}>
                       <Text>{dayjs(v).format('DD MMM YYYY')}</Text>
-                      <Text type="secondary" style={{ fontSize: 11 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
                         {r.daysLate > 0 ? `${r.daysLate} day(s) late` : r.daysToDelivery != null ? `${r.daysToDelivery} day(s) to go` : ''}
                       </Text>
                     </Space>

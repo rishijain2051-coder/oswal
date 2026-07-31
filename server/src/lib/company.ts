@@ -54,7 +54,7 @@ export async function companyState(tx: Tx = prisma): Promise<string | null> {
 export function companyLogoPath(c: CompanyProfile): string | null {
   if (!c.logoFilename) return null;
   // Never trust the stored string as a path. Only the basename is used, so a value like
-  // `../prisma/dev.db` can only ever resolve inside `uploads` — belt and braces beside
+  // `../prisma/schema.prisma` can only ever resolve inside `uploads` — belt and braces beside
   // keeping the field out of the API schema.
   const safeName = path.basename(c.logoFilename);
   if (safeName !== c.logoFilename) return null;

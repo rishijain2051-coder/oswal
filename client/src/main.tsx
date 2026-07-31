@@ -30,7 +30,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     >
       <AntApp>
         <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
+          {/* Opting into the two v7 behaviours now, which is what the router was warning
+              about on every boot: state updates wrapped in `React.startTransition`, and
+              relative paths inside a splat route resolving the v7 way. Taking them here
+              means the upgrade is already done rather than waiting to be a surprise. */}
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <AuthProvider>
               <AppRoutes />
             </AuthProvider>

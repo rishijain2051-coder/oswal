@@ -166,7 +166,7 @@ export default function StatutoryTab() {
         confirmLoading={save.isPending}
         okText="Save"
         width={640}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" onFinish={(v) => save.mutate(v)}>
           <Row gutter={12}>

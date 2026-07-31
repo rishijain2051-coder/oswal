@@ -59,7 +59,7 @@ export default function HistoryHint({
         <Button type="text" size="small" icon={<HistoryOutlined />} disabled style={{ opacity: 0.35 }} />
       </Tooltip>
     ) : (
-      <Text type="secondary" style={{ fontSize: 11 }}>
+      <Text type="secondary" style={{ fontSize: 12 }}>
         {loading ? 'checking history…' : 'no history yet'}
       </Text>
     );
@@ -93,14 +93,14 @@ export default function HistoryHint({
                     o.label
                   )}
                   {o.detail && (
-                    <Text type="secondary" style={{ fontSize: 11 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
                       {' '}
                       · {o.detail}
                     </Text>
                   )}
                 </span>
                 <span style={{ whiteSpace: 'nowrap' }}>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
                     {dayjs(o.date).format('DD MMM YY')}
                   </Text>{' '}
                   {onApply ? (
@@ -114,7 +114,7 @@ export default function HistoryHint({
               </div>
             ))}
             {s.count > 5 && (
-              <Text type="secondary" style={{ fontSize: 11 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
                 …and {s.count - 5} more
               </Text>
             )}
@@ -148,8 +148,8 @@ export default function HistoryHint({
       style={{ color: verdict.flag ? '#d46b08' : undefined }}
     />
   ) : (
-    <span style={{ cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>
-      <Text type={verdict.flag ? 'warning' : 'secondary'} style={{ fontSize: 11 }}>
+    <span style={{ cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}>
+      <Text type={verdict.flag ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
         {verdict.flag ? <WarningOutlined /> : <HistoryOutlined />} {fig(primary.last!.value)}
         {primary.count > 1 ? ` · ${primary.count}×` : ''}
       </Text>

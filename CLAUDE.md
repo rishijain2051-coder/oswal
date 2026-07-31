@@ -6,20 +6,128 @@ Guidance for working in this repo.
 
 Modular ERP for Saraswati Export (furniture/hardware exporter). **Phase 1 =
 Product Management**, **Phase 2 = Operations** (proformas → orders → production
-board → payments), **Phase 3 = Manforce** (workers → muster → wages → statutory).
-Sales is still a placeholder that routes to `PlaceholderModule`. Product data
-(costing, dimensions, differentiated volumes) feeds Operations; the Operations board
-feeds Manforce; Sales (container planning) comes later.
+board), **Phase 3 = Manforce** (workers → muster → wages → statutory), **Phase 4 =
+Finished Product & Sales** (finished stock → packing → container → shipment →
+invoice). All four are built and self-checked. Product data (costing, dimensions,
+differentiated volumes) feeds Operations; the Operations board feeds Manforce and
+finished stock; what ships feeds the invoice.
+
+## The shape of the app — one hub, one home for money
+
+Two rules about where things live. They are navigation decisions, but breaking either
+one puts the same fact in two places, which is the failure the rest of this file is
+about.
+
+**1. The ORDER is the single source of truth, and the order page is the hub.** An order
+is what a person asks about, so `OrderDetailPage` must answer every form of that
+question without sending anybody to a list: the board, what is finished, which cartons
+it went into, which container carried them, which invoice billed it, what the buyer has
+paid, its proforma, its products, its material sheets, its attachments, and who changed
+a price. The sidebar lists are for seeing *everything* at once — they are not the way to
+reach *one* job. Add a record that hangs off an order and it must become reachable from
+that page in the same commit.
+
+- The page is in **tabs** (Production · Fulfilment · Paperwork · Money · History) with
+  the headline figures in a strip **above** them, so no tab repeats a summary and the
+  board — the thing looked at daily — is not buried under a dozen cards.
+- **`GET /orders/:id/fulfilment`** is the one read behind everything after the board:
+  per-line finished/packed/shipped/invoiced, the packing batches, the shipments with
+  their containers, and the invoices. It is deliberately **NOT folded into
+  `serializeOrder`**, which runs once per row of the orders list — loading the finished
+  position for every order to draw a list is several board walks per row.
+- A co-loaded shipment and an invoice spanning orders are returned **whole**, with
+  `mine` naming this order's share. Container fit is a property of the box, not of one
+  order's share of it, so trimming the lines would make the capacity bar lie; and an
+  invoice's total is the document's, not this order's.
+- `order-fulfilment` is in **both** `OPS_KEYS` and `SALES_KEYS`: packing and shipping
+  move it, but so does a board clearance, because DONE is what finished stock derives
+  from.
+
+**2. Money has exactly one home: `/finance`.** Receipts, payments, party statements and
+invoices are all under it (`client/src/pages/finance/`). Payments used to sit under
+Operations and invoices under Sales, which put the two halves of one buyer's position on
+opposite sides of the menu. The old paths still resolve — `App.tsx` redirects
+`/operations/payments/*` and `/sales/invoices/*` with the splat carried across, so a
+bookmark lands on the right record rather than on a section index.
+
+The sidebar follows from those two rules: **Orders** is top-level (it is the hub), then
+**Operations** (proformas, delivery, sheets, suppliers, raw stock), **Dispatch**
+(finished stock, packing, shipments), **Finance**, **Manforce**, **Products**, and
+**Settings**. Only the group you are in is expanded — `openKeys` is controlled, not
+`defaultOpenKeys`, which is read once at mount and left a group shut when you navigated
+into it from elsewhere. Adding a sub-section means adding its URL segment to
+`SECTION_KEYS` in the same commit, or the sidebar highlights nothing on that page.
 
 ## Architecture
 
 - npm **workspaces**: `server` + `client`.
-- **server**: Express + TypeScript, Prisma → SQLite (`server/prisma/schema.prisma`).
-  Run with `tsx` in dev. Swap `provider` to `postgresql` to scale; models are portable.
+- **server**: Express + TypeScript, Prisma → **Postgres** (`server/prisma/schema.prisma`).
+  Run with `tsx` in dev. See *The database* below — it lives inside the repo.
 - **client**: React + Vite + TypeScript + Ant Design. Data via `@tanstack/react-query`
   + axios (`client/src/api/`). Vite proxies `/api` and `/uploads` to `:4000`.
 - **Auth**: JWT bearer token in `localStorage`, roles Admin > Manager > Operator > Viewer
   (`server/src/middleware/auth.ts`, `client/src/auth/AuthContext.tsx`).
+
+## The database — Postgres, inside the repo
+
+One factory, one machine. The backend runs on the factory's own computer and the database
+runs beside it: `server/.pgdata` is a real Postgres cluster, driven by
+`server/scripts/pg.ts`. The binaries come from the `embedded-postgres` npm package, so
+there is nothing to install and no Docker — `npm install && npm run pg:start`. It was
+SQLite until the move; the schema stayed portable and only the provider changed.
+
+- **`DATABASE_URL` is the single source of truth.** Port, user, password and database name
+  are parsed out of it; the port reaches `pg_ctl` as `-o "-p …"` rather than being written
+  into `postgresql.conf`, so there is no second copy to disagree. Point it at a hosted
+  Postgres and the app is unchanged — the `pg:*` scripts refuse to manage a non-local host.
+- `initdb` uses **`--locale=C`**, which sorts in byte order — the collation SQLite gave,
+  so `orderBy: name` lists did not silently reorder under everyone.
+- The version in `package.json` is **pinned exactly, not caret-ranged**. A minor bump would
+  ship a new Postgres major whose binaries refuse to open an existing data directory.
+- `pg_ctl start` output goes to a **file, never a pipe**: the postmaster inherits the
+  handle and outlives `pg_ctl`, so with a pipe `spawnSync` waits forever on a healthy
+  database. This cost a debugging session; the comment in `run()` says so.
+- Only `initdb`, `pg_ctl` and `postgres` ship — **no `psql`, no `createdb`, no `pg_dump`.**
+  The database is created over a `pg` connection, and backups are a directory copy.
+
+**Backups: `npm run db:backup` / `db:backups` / `db:restore`** (`scripts/backup.ts`).
+Postgres permits copying a data directory only while the server is **cleanly stopped**, so
+the script stops, copies, and starts again — a copy of a running cluster is a torn snapshot
+that may not start at all. Two things matter:
+
+- **`uploads` is copied with it.** Photos, hand-over proof images, worker documents and the
+  buyer's own POs are files with only a filename in the database; tables alone would restore
+  rows pointing at documents that no longer exist. One record, one backup.
+- A `BACKUP_COMPLETE` marker is written **last**, and `list`/`restore` ignore directories
+  without it — an interrupted copy must not look like a backup. A restore moves the cluster
+  it replaces aside instead of deleting it, so restoring the wrong one is itself undoable.
+
+A copy restores onto the **same Postgres major and platform** (both pinned), and it is a
+cold, full copy — which is why the version pin above is load-bearing.
+
+## Concurrency — the engine no longer protects the board
+
+SQLite serialised write transactions, which made read-validate-write safe almost by
+accident. **Postgres at READ COMMITTED does not:** two clearances can read the same board,
+both conclude the pieces are there, and both append. The transaction was never what closed
+that window; the engine was.
+
+So `server/src/lib/rowLock.ts` makes it explicit. `lockOrder(tx, orderId)` takes an
+exclusive lock on the parent `Order` row — an ordinary `updateMany` of `updatedAt`, which
+takes the same row lock without hand-written SQL — and it **must be the first statement in
+the transaction**. Taken after the board has been read it locks nothing that matters. Three
+routes hold it, so they take their turn per order: `POST /orders/:id/moves`,
+`DELETE /moves/:id` (an undo must still be the newest movement) and `PUT /orders/:id`
+(qty may not drop below `wip + done`, re-checked under the lock rather than before it).
+Orders lock independently — only movements on the same order invalidate each other.
+
+## Search — `contains` is case-sensitive here
+
+`like(q)` in `server/src/lib/search.ts`, used by every search box. SQLite's `LIKE` matched
+regardless of case for free; Postgres' does not, so a bare `{ contains: q }` silently
+returns nothing for a lower-case search over upper-case data — a search box that looks
+broken with no error anywhere. `like()` adds `mode: 'insensitive'` (`ILIKE`) and is stated
+in one place so a new search box cannot get the case-sensitive default by accident.
 
 ## Costing engine — the core
 
@@ -97,8 +205,13 @@ each hand-over carries a note and photos → jobwork feeds Payments.**
 - Guards worth preserving: only the newest movement of a line can be undone; a line's
   stage line cannot change once pieces have moved; order qty cannot drop below
   `wip + done`; `PUT /orders/:id` PATCHES lines by id (never wipe-and-rebuild, that
-  would destroy history). Order status auto-advances Confirmed → Production → Ready
-  (`impliedOrderStatus`); Shipped/Closed/Cancelled stay human decisions.
+  would destroy history). Order status auto-advances Confirmed → Production → Ready →
+  **Shipped** (`impliedOrderStatus`, which takes the shipped quantity — a fully shipped
+  order becomes Shipped, a partly shipped one stays where the board put it). Only **Closed
+  and Cancelled** are human decisions now: `PATCH /orders/:id/status` accepts only those two
+  and refuses the derived four, and `POST /orders/:id/reopen` leaves a terminal state and
+  re-derives. The order page shows the status as a read-only tag with Close / Cancel /
+  Reopen actions — never a free dropdown, which would offer statuses that do not stick.
 - `OperationSheet` is now just a numbered **material sheet** (costing explosion for a
   product × qty). It holds no progress.
 
@@ -215,6 +328,119 @@ closed. Do not add a payroll-period model; it would be wrong on day one.
 - RBAC: Operator marks the muster, Manager+ for workers, rates, money and postings.
   Identity and bank fields are redacted below Manager (`redact()` in the routes).
 
+## Finished goods — a ledger, not a count
+
+What is finished and still here is DERIVED, exactly as where pieces are is derived from
+the `StageMove` ledger. `server/src/lib/finished.ts` is the pure engine.
+**There is no quantity-on-hand column and there must never be one.**
+
+- Four things put pieces on the floor and two take them off: the board's DONE bucket,
+  adjustments, bought-in goods and returns; less packed and shipped.
+- **The board is read LIVE via `buildBoard`, never mirrored into rows on COMPLETE.** That
+  is the whole reason this can be trusted: undo a completion and the stock un-does itself,
+  and a `RETURN` move reduces it without a compensating row. `FinishedTxn` therefore holds
+  ONLY what the board cannot know — `ADJUST_IN`, `ADJUST_OUT`, `RETURN_IN`. Its `qty` is
+  always positive and `kind` carries the direction, the same discipline as `OrderCharge`.
+- **Bought-in finished goods reuse the supplier machinery.** `RawItem.productId` set means
+  "this purchased item IS product X, bought in rather than made". The link is on `RawItem`
+  and NOT on `StockTxn` deliberately: a receipt against a product would mean making
+  `StockTxn.rawItemId` nullable, and some fifteen readers dereference `txn.rawItem` with no
+  null check. This way the receipt, the `stockTxnId @unique` billed-once rule and the
+  supplier statement are all untouched.
+- Pieces are either EARMARKED to the order line that produced them or in a **FREE POOL**
+  any order may draw on. An opening balance, over-production, bought-in goods and returns
+  are free-pool by nature. `byProduct` is the sum of the two.
+- **`availableToShip` counts PACKED and unshipped, never raw `onHand`** — shipping what was
+  never packed is exactly what the pack step exists to prevent.
+- **There is no location or godown dimension. Deliberately.** One factory, one floor; a
+  second axis would be a column nobody fills in.
+
+## Shipping — cartons, space and weight
+
+`server/src/lib/shipping.ts` is the single authority for how many cartons a quantity makes,
+how much room and weight they take, and whether a dispatch or an invoice is allowed —
+mirrored exactly in `client/src/util/shipping.ts` (keep them identical, like `costing.ts`,
+`expr.ts` and `pricing.ts`). `verify.ts` now compares **both** mirror pairs by text, from a
+marker to end of file; the header comments above the marker may differ, and must not quote
+the marker declaration or `indexOf` matches the comment instead of the code.
+
+- **`Product.volumeAfterPackingCbm` is PER PIECE, not per carton** — the wizard divides
+  `L×W×H×k` by `piecesPerCarton`. Carton volume is it × `piecesPerCarton`. Use it raw and
+  every load under-reports by a factor of `piecesPerCarton`. `PackingBatch.cbmPerPiece`
+  snapshots it in the same unit as its source so the property stays checkable.
+  It reconciles back to the box volume **to within 4-dp rounding, not exactly** — the stored
+  per-piece figure is rounded, so multiplying it back can be out by half a unit in the last
+  place per piece. That drift is why `CBM_MISMATCH_PCT` is 1% and not zero; verify.ts asserts
+  the tolerance rather than an equality the data cannot deliver.
+- **A part carton is a whole box for volume and pro-rata for weight.** A half-full box still
+  occupies a full box on a vessel. `cartonCbm()` takes no piece count at all, so a caller
+  cannot scale a box down.
+- Volume precedence is `cbmPerCartonOverride` (somebody measured it) → the stored per-piece
+  figure → the dimensions. **A caller hands authority to the dimensions by clearing
+  `cbmPerPiece`** — that is the whole contract, and there is deliberately no "has it
+  changed?" comparison, which would depend on data the caller may not pass. A disagreement
+  over 1% is reported via `mismatchPct` and never resolved silently.
+- A capacity of 0 means "not a container" (an LCL part load) and can never be over capacity.
+  Tare weight counts against the payload — the limit is on what crosses a weighbridge.
+- `vgm()` is always `tare + derived cargo gross`; it is never stored, so it cannot
+  contradict the packing list.
+- `guardShipQty` / `guardPackQty` / `guardInvoiceQty` return a message or null, the shape
+  `validateMove()` uses, so a drawer renders them the way the board's drawers already do.
+  They are the WARNING; the server must re-check inside the write transaction under
+  `lockOrder`.
+- `ContainerType` is master data (CBM + payload kg), seeded from `BUILTIN_CONTAINER_TYPES`
+  exactly as `BUILTIN_METHODS` seeds the cost formulas. `isActive`, not `deletedAt`. The
+  seed refreshes only the name and sort order — **capacities are never overwritten**, or
+  re-running it would undo the Admin's edit.
+
+## Invoices — inputs copied, totals derived
+
+`Invoice` **stores no total**. Its lines COPY their price inputs from the order line when it
+is raised — the same thing accepting a proforma does when it copies charges onto the order —
+and every figure is then produced by `documentValueOf()` / `documentTotalsOf()`. That is how
+both rules hold at once: the document is frozen against a later correction to the order (the
+property `StatutoryPostingLine.wages` exists for), yet nothing on it can contradict the one
+pricing engine. `Invoice` satisfies `DocumentLike` as-is, so **pricing.ts needed no change**.
+Document money now has **four readers**: `serializeOrder`, the FIFO buckets, the dashboard's
+`orderValue()`, and the invoice.
+
+An invoice may span SEVERAL ORDERS of one buyer; a SHIPMENT carries no money at all and no
+`buyerId`, because a container may be co-loaded. Freight and insurance are document-level
+charges on the invoice. A **cancelled invoice keeps its number** — a gap in an invoice series
+is a compliance problem — and drops out of every total the way a cancelled order does.
+
+## The receivable basis — the one setting that restates history
+
+`AppSetting.receivableBasis` is `ORDER` (the default, and how the app has always worked) or
+`INVOICE`. Because allocation is a pure function of (buckets, payments) recomputed on every
+read, flipping it restates every balance and statement immediately — **no migration, nothing
+to rebuild**.
+
+- **It is applied inside `buildFinanceContext()` and in `buyerPositions()`, and nowhere
+  else.** A route that branched on it separately would be a second source of truth and the
+  order page and the Payments page would disagree — the failure this file already warns
+  about. Note that `/finance/*` does NOT use `buildFinanceContext`: it has its own
+  `financeData()`, so **both** funnels carry the basis.
+- Under INVOICE the buckets are invoices, so **one bucket is no longer one order**. Callers
+  must use `pos.subjectOf(bucket)`, never `orders.find(o => o.id === b.orderId)!`, and must
+  match a receipt's allocations on `a.key` rather than `a.orderId`.
+- **Only an `ISSUED` invoice is a debt.** A DRAFT has not been sent to anybody, so it is
+  neither owed nor a reduction of the order book — counting it would make a receivable
+  appear the moment somebody started typing.
+- An invoice spanning orders is ONE debt. `attributeToOrders()` splits what was settled back
+  across its orders weighted by `lineNet()`, giving the rounding remainder to the largest
+  share so the parts sum to the whole EXACTLY. **`invoiceReceived` is the authority**; the
+  per-order figure is a labelled display attribution that colours the order page and must
+  never be summed into a total.
+- A receipt may name BOTH an invoice and an order. The invoice is tried first and the order
+  is a **fallback, not an alternative** — treating them as either/or drops the order aim the
+  moment the basis is switched back.
+- `ctx.orderBook` is populated ONLY under INVOICE. Under ORDER the order already IS the
+  receivable, and a map that also called it "not yet billed" would invite a page to show the
+  same money twice.
+- `LedgerEntry.invoiceId` is advisory in exactly the way `orderId` is: where money was
+  AIMED, not where FIFO landed it.
+
 ## Remembering figures — suggestions vs the change log
 
 Two different questions, answered by two deliberately different mechanisms. Do not
@@ -329,12 +555,14 @@ since freight would then be billed on goods that did not come across.
 
 ## Nothing is destroyed — soft delete
 
-`Product`, `Order`, `Proforma`, `LedgerEntry` and `OperationSheet` carry `deletedAt`.
+`Product`, `Order`, `Proforma`, `LedgerEntry`, `OperationSheet`, `Shipment` and `Invoice`
+carry `deletedAt`.
 `DELETE` sets it; the row survives and can be restored from the Trash drawer on the list
 page. Two rules keep it safe:
 
 - **Filtering happens at the QUERY layer, never in the pure functions**
-  (`server/src/lib/softDelete.ts`). The costing, board, workforce and pricing engines know
+  (`server/src/lib/softDelete.ts`). The costing, board, workforce, shipping, finished-stock
+  and pricing engines know
   nothing about deletion — a deleted order leaves the money picture the way a *cancelled*
   one does, because the query excludes it. `verify.ts` asserts this by passing a
   soft-deleted order to `buildFinanceContext` and checking it is still priced: if someone
@@ -461,10 +689,12 @@ Undoing any of these reopens a hole that was closed deliberately:
 
 ## Conventions
 
-- SQLite has no Prisma enums — enum-like fields are `String` validated with zod in routes.
+- Enum-like fields are `String` validated with zod in routes — a SQLite constraint
+  originally, kept because it stays portable and the validation is in the routes anyway.
 - `nextDocNumber(key, tx?)` — **pass the caller's `tx` when already inside
-  `$transaction`.** A nested transaction deadlocks: SQLite serialises writes, so the
-  inner one can never start until the outer commits (it times out after 5 s).
+  `$transaction`.** A nested transaction is a second connection: its write leaves the
+  caller's atomic unit and blocks behind any row the outer transaction holds, which is a
+  deadlock that ends as a 5 s timeout rather than an error naming the cause.
 - **`companyState()` upserts, so it is a WRITE.** Read it before opening a transaction,
   never inside one — the same deadlock, and it cost a 5-second timeout on the proforma
   save before every call site was hoisted.
@@ -486,8 +716,8 @@ Undoing any of these reopens a hole that was closed deliberately:
 
 ```bash
 npm install
-npm run db:setup     # prisma db push + seed
-npm run dev          # server :4000 + client :5173
+npm run db:setup     # start Postgres + prisma db push + seed
+npm run dev          # starts Postgres, then server :4000 + client :5173
 npm run build        # type-check + build both (run before declaring done)
 ```
 
@@ -499,6 +729,29 @@ npm run db:clean     # clean slate: operational data to zero, doc numbering rese
 npm run db:workers   # migrate typed wage names onto worker records (idempotent)
 ```
 
+The database, which lives in `server/.pgdata`:
+
+```bash
+npm run pg:start     # create the cluster if needed, start it, create the database
+npm run pg:stop      # stop it (a clean stop is what makes a backup restorable)
+npm run pg:status    # data directory, whether it is up, which database
+npm run pg:restart
+npm run pg:reset -- --yes   # destroy the cluster and start empty (db:clean is usually what you want)
+```
+
+Backups — cluster **and** uploads, since the two are one record:
+
+```bash
+npm run db:backup                        # stop, copy to server/backups/<date>, start again
+npm run db:backups                       # what is on disk
+npm run db:restore -- latest --yes       # or a specific name from db:backups
+```
+
+`db:setup`, `db:demo`, `db:fill`, `db:clean` and `db:workers` all start Postgres first, so
+none of them fails with a connection error on a cold machine. `npm run verify` deliberately
+does not — it needs no database. `npm run serve` is the factory boot sequence: database,
+then the built API.
+
 `prisma/verify.ts` holds the invariants as pure-function assertions with fixed inputs:
 the example.xlsx FOB (₹19,180.60), board conservation, the move rules, hop expansion,
 jobwork reconciliation, FIFO allocation, and the whole workforce engine — the
@@ -509,18 +762,30 @@ document pricing (line discounts, charge signs, the GST slabs, the CGST/SGST spl
 reconciling to the paisa, and an export staying untaxed), the scheduling engine
 (auto-scheduling from stage durations, plan-versus-board status, the delivery verdict), the
 currency grouping behind the forex position, and the rule that soft delete stays OUT of the
-pure functions. It needs no database, so it survives any wipe — **this is now the authority
+pure functions, and the receivable basis (the ORDER default unchanged, an invoice spanning
+orders staying one debt, the attribution reconciling to the paisa, a draft not yet a debt).
+It needs no database, so it survives any wipe — **this is now the authority
 for the costing formulas**, not a seeded product. Add a case here whenever you touch
-`costing.ts`, `production.ts`, `finance.ts`, `workforce.ts`, `suggest.ts`, `pricing.ts` or
-`scheduling.ts`.
+`costing.ts`, `production.ts`, `finance.ts`, `workforce.ts`, `suggest.ts`, `pricing.ts`,
+`scheduling.ts`, `shipping.ts` or `finished.ts`.
+
+It also holds the **client-mirror identity checks** as a table of pairs (`pricing`,
+`shipping`). Add a pair there whenever you add a mirrored engine, or nothing stops it
+drifting.
 
 `prisma/cleanSlate.ts` (`db:clean`) is the opposite of the demo seed and shares its wipe
-list: every operational table to zero, uploads unlinked, and all six DocSequence
+list: every operational table to zero, uploads unlinked, and all ten DocSequence
 counters back to 0 so numbering restarts at 001. Configuration is deliberately kept —
-logins, currencies, units, attributes, cost formulas, stage lines, trades, holidays,
-workforce settings and statutory components — because that is setup, not data. **If you
-add a model, add it to BOTH `wipeOperational()` and `cleanSlate.ts`**, or a wipe will
-leave orphans behind that resurface on whichever new record reuses their id.
+logins, currencies, units, attributes, cost formulas, stage lines, container types, trades,
+holidays, workforce settings and statutory components — because that is setup, not data.
+**If you add a model, add it to BOTH `wipeOperational()` and `cleanSlate.ts`**, or a wipe
+will leave orphans behind that resurface on whichever new record reuses their id.
+
+The sales block sits AFTER `ledgerEntry.deleteMany()`, because a buyer receipt may name the
+invoice it was aimed at; and `finishedTxn` goes before `shipmentLine` (a return names the
+dispatch it reverses) while `packingBatch` goes last (a shipment line REQUIRES its batch).
+Relying on a `SetNull` referential action instead would make the order of that list
+load-bearing in a way its own comment promises it is not.
 
 `prisma/demoSeed.ts` builds a whole factory mid-season — 10 photographed products
 with real costing, three buyers in GBP/USD/EUR, proformas at every stage of the sales

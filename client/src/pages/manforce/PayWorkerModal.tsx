@@ -68,7 +68,7 @@ export default function PayWorkerModal({ mode, worker, onClose }: { mode: PayMod
   const title = mode === 'ADVANCE' ? `Advance to ${worker.name}` : mode === 'DEDUCT' ? `Charge ${worker.name}` : `Pay ${worker.name}`;
 
   return (
-    <Modal open={mode != null} title={title} onCancel={onClose} okText="Record" confirmLoading={submit.isPending} onOk={() => form.submit()} destroyOnClose>
+    <Modal open={mode != null} title={title} onCancel={onClose} okText="Record" confirmLoading={submit.isPending} onOk={() => form.submit()} destroyOnHidden>
       {mode === 'PAY' && (
         <Alert
           type="info"

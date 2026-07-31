@@ -22,19 +22,25 @@ the workforce is owed joins the same payables view as vendors and suppliers.
 |---|---|
 | Frontend | React + Vite + TypeScript + Ant Design |
 | Backend | Node + Express + TypeScript |
-| ORM / DB | Prisma → **SQLite** (swap `provider` to `postgresql` to scale) |
+| ORM / DB | Prisma → **Postgres**, running inside the project folder (no install, no Docker) |
 | Auth | JWT + bcrypt, roles Admin / Manager / Operator / Viewer |
 | PDFs | pdfkit, server-side |
 
 ## Getting started
 
 ```bash
-npm install          # installs both workspaces
-npm run db:setup     # create the database + seed masters
+npm install          # installs both workspaces, including the Postgres binaries
+npm run db:setup     # start Postgres, create the database + seed masters
 npm run dev          # API on :4000, app on :5173
 ```
 
 Open **http://localhost:5173**.
+
+There is **nothing to install for the database**. Postgres itself arrives as an npm
+package and its data lives in `server/.pgdata`, inside the project folder — `npm run dev`
+starts it for you, and `npm run pg:stop` shuts it down. Everything about it comes from the
+one `DATABASE_URL` in `server/.env`, so pointing the app at a hosted Postgres later is a
+one-line change.
 
 To see the whole system populated — a catalogue with photographs, orders part-way
 through production, and a full set of accounts — load the demo instead:
@@ -361,18 +367,24 @@ server/
   src/lib/documentUpload.ts attachment validation by magic bytes
   src/lib/docPdf.ts        proforma PDF
   src/lib/mailDraft.ts     .eml draft with attachment
+  src/lib/rowLock.ts       why a clearance locks its order first
+  src/lib/search.ts        case-insensitive name/code search
+  scripts/pg.ts            the Postgres cluster in server/.pgdata
+  scripts/backup.ts        cold backup + restore of the cluster and uploads
 client/
   src/pages/operations/    proformas, orders, board, payments, statements
   src/pages/product/       catalogue, details, wizard
   src/pages/manforce/      workers, muster roll, wages, statutory
   src/components/HistoryHint.tsx   the "last time" marker beside a figure
 server/uploads/            product images, hand-over photos, worker documents (git-ignored)
+server/.pgdata/            the Postgres cluster itself (git-ignored)
+server/backups/            cold backups of the cluster + uploads (git-ignored)
 ```
 
 ## Scripts
 
 ```bash
-npm run dev              # both apps
+npm run dev              # both apps (starts Postgres first)
 npm run verify           # costing, board, allocation and workforce self-checks
 npm run db:setup         # push schema + seed masters
 npm run db:demo          # load the worked demo
@@ -380,6 +392,28 @@ npm run db:workers       # turn typed wage names into worker records (idempotent
 npm run build            # type-check + build both apps
 npm --workspace server run db:studio   # browse the database
 ```
+
+The database:
+
+```bash
+npm run pg:start         # start it (creates the cluster the first time)
+npm run pg:stop          # stop it
+npm run pg:status         # is it up, and where does its data live
+npm run serve            # the factory boot sequence: database, then the built API
+```
+
+Backups take the database **and** `uploads` together, because a restored order whose bill
+of lading is missing is not a restored order:
+
+```bash
+npm run db:backup                     # stop, copy to server/backups/<date>, start again
+npm run db:backups                    # what is on disk
+npm run db:restore -- latest --yes    # replaces live data; the old copy is moved aside
+```
+
+A backup is a copy of the stopped cluster, so the app is down for the few seconds it takes.
+It restores onto the same Postgres major version and platform, both of which are pinned in
+`server/package.json` — do not loosen that pin.
 
 `npm run build` runs `prisma generate`, which on Windows cannot replace its query
 engine while a dev server is holding it — stop `npm run dev` first.

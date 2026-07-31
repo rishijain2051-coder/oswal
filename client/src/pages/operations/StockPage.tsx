@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Breadcrumb, Button, Card, Col, Collapse, DatePicker, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography, App } from 'antd';
-import { HomeOutlined, PlusOutlined, ImportOutlined, ExportOutlined } from '@ant-design/icons';
+import { Breadcrumb, Button, Card, Col, Collapse, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip, Typography, App } from 'antd';
+import { HomeOutlined, PlusOutlined, ImportOutlined, ExportOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ColumnsType } from 'antd/es/table';
@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import { api, apiError } from '../../api/client';
 import { useRawItems, useStockTxns, useSuppliers, type RawItem, type StockTxn } from '../../api/ops';
 import { num } from '../../util/format';
+import { useAuth } from '../../auth/AuthContext';
 import { RateHint } from '../../components/HistoryHint';
 
 const { Title, Text } = Typography;
@@ -18,6 +19,8 @@ export default function StockPage() {
   const { data: items, isLoading } = useRawItems();
   const { data: txns } = useStockTxns();
   const { data: suppliers } = useSuppliers('MATERIAL');
+  // Same bar the server sets on the route, so nobody is shown a button that will 403.
+  const canEditStock = useAuth().hasRole('Operator');
 
   const itemGroups = useMemo(() => {
     const map = new Map<string, RawItem[]>();
@@ -60,6 +63,19 @@ export default function StockPage() {
     onError: (e) => message.error(apiError(e)),
   });
 
+  /**
+   * A stock movement is typed by hand, so a wrong quantity or rate has to be removable —
+   * there is no edit, and without this the only record of a mistake stayed on the
+   * supplier's statement forever. The server refuses when the receipt has already been
+   * billed, or when removing it would drive the balance negative, and says which; this
+   * only has to surface that answer.
+   */
+  const delMove = useMutation({
+    mutationFn: (id: number) => api.delete(`/stock/txns/${id}`),
+    onSuccess: () => { message.success('Movement removed.'); refresh(); },
+    onError: (e) => message.error(apiError(e)),
+  });
+
   const openItemNew = () => { setEditItem(null); itemForm.resetFields(); itemForm.setFieldsValue({ unit: 'PCS', reorderLevel: 0, openingQty: 0 }); setItemOpen(true); };
   const openItemEdit = (it: RawItem) => { setEditItem(it); itemForm.setFieldsValue(it); setItemOpen(true); };
   const openMove = (type: 'IN' | 'OUT', rawItemId?: number) => { setMoveType(type); moveForm.resetFields(); moveForm.setFieldsValue({ rawItemId, date: dayjs() }); setMoveOpen(true); };
@@ -95,6 +111,25 @@ export default function StockPage() {
     { title: 'Supplier', dataIndex: ['supplier', 'name'], render: (v) => v || '—' },
     { title: 'Order Ref', dataIndex: 'orderRef', render: (v) => v || '—' },
     { title: 'Note', dataIndex: 'note', render: (v) => v || '—' },
+    {
+      title: '',
+      key: 'x',
+      width: 60,
+      render: (_, r) =>
+        canEditStock ? (
+          <Popconfirm
+            title="Remove this movement?"
+            description="The stock balance goes back to what it was. A receipt that has already been billed cannot be removed."
+            okText="Remove"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => delMove.mutate(r.id)}
+          >
+            <Tooltip title="Remove this movement">
+              <Button size="small" danger type="text" aria-label="Remove this stock movement" icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        ) : null,
+    },
   ];
 
   return (

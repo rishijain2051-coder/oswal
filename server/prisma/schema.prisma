@@ -1,13 +1,19 @@
-// Saraswati Export ERP — Prisma schema (Phase 1: Product Management)
-// Provider is SQLite for local use. To scale later, change provider to
-// "postgresql" and the DATABASE_URL — the models below are portable.
+// Saraswati Export ERP — Prisma schema
+//
+// Provider is Postgres. In development it is a cluster that lives inside the repo
+// (`server/.pgdata`, managed by `scripts/pg.ts` — see `npm run pg:start`); in production
+// it is a hosted database, and only DATABASE_URL differs between the two.
+//
+// The models stayed portable across the move off SQLite and are worth keeping that way:
+// enum-like fields are `String` validated with zod in the routes, money is `Float`
+// rounded at the API boundary, and no column uses a native database type.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -47,6 +53,7 @@ model Currency {
   costSheets CostSheet[]
   orders     Order[]
   proformas  Proforma[]
+  invoices   Invoice[]
 }
 
 model Unit {
@@ -112,6 +119,7 @@ model Buyer {
   orders    Order[]
   proformas Proforma[]
   ledger    LedgerEntry[]  @relation("BuyerLedger")
+  invoices  Invoice[]
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +199,12 @@ model Product {
   orderLines      OrderLine[]
   proformaLines   ProformaLine[]
   operationSheets OperationSheet[]
+
+  finishedTxns  FinishedTxn[]
+  packingBatches PackingBatch[]
+  invoiceLines  InvoiceLine[]
+  /// Raw-item rows that are this product bought in finished — see RawItem.productId.
+  boughtInAs    RawItem[]
 
   @@index([productTypeId])
   @@index([status])
@@ -372,7 +386,21 @@ model RawItem {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  txns StockTxn[]
+  /// Set when this purchased item IS a finished product, bought in rather than made —
+  /// a trading line the factory resells without producing.
+  ///
+  /// The link lives HERE, not on `StockTxn`, on purpose. A receipt against a product
+  /// would mean making `StockTxn.rawItemId` nullable, and every reader dereferences
+  /// `txn.rawItem` without a null check. This way the whole supplier machinery is
+  /// untouched — the receipt, the `stockTxnId @unique` billed-once rule, the supplier
+  /// statement and the un-billed-deliveries surface all keep working — and finished
+  /// stock simply counts `StockTxn` rows whose item points at a product.
+  productId Int?
+
+  product Product?   @relation(fields: [productId], references: [id])
+  txns    StockTxn[]
+
+  @@index([productId])
 }
 
 model StockTxn {
@@ -553,6 +581,10 @@ model OrderLine {
   moves    StageMove[]
   sheet    OperationSheet?
   schedule OrderLineSchedule?
+
+  finishedTxns   FinishedTxn[]
+  packingBatches PackingBatch[]
+  invoiceLines   InvoiceLine[]
 }
 
 /// When an order line SHOULD be at each stage.
@@ -832,6 +864,11 @@ model LedgerEntry {
   /// Set when this payment IS the handing over of an advance. The advance record holds
   /// the recovery terms; the cash lives here, so it is counted exactly once.
   advanceId            Int?     @unique
+  /// The invoice a buyer receipt is aimed at, under `AppSetting.receivableBasis = INVOICE`.
+  /// Optional and advisory in exactly the way `orderId` is: it says where the money was
+  /// AIMED, not where FIFO landed it. Never read this to work out what an invoice has
+  /// been paid — `buildFinanceContext()` allocates it, and its answer is the only one.
+  invoiceId            Int?
   partyName            String // snapshot / for WORKER
   kind                 String // BILL | PAYMENT
   amount               Float
@@ -856,7 +893,9 @@ model LedgerEntry {
   contractor Contractor?         @relation(fields: [contractorId], references: [id])
   component  StatutoryComponent? @relation(fields: [statutoryComponentId], references: [id])
   advance    WorkerAdvance?      @relation(fields: [advanceId], references: [id])
+  invoice    Invoice?            @relation(fields: [invoiceId], references: [id])
 
+  @@index([invoiceId])
   @@index([orderId])
   @@index([partyType, supplierId])
   @@index([partyType, buyerId])
@@ -868,7 +907,12 @@ model LedgerEntry {
 
 model DocSequence {
   id      Int     @id @default(autoincrement())
-  key     String  @unique // PI | ORD | OP | WRK | CTR | STP | DPI | DORD
+  /// PI | ORD | OP | WRK | CTR | STP | DPI | DORD | INV | DINV | SHP | PKL
+  ///
+  /// INV and DINV are year-formatted (see YEAR_KEYS in lib/numbering.ts), because an
+  /// invoice series is quoted by financial year exactly as PI/ORD are. SHP and PKL are
+  /// internal handles and stay flat.
+  key     String  @unique
   prefix  String
   useYear Boolean @default(false)
   lastNo  Int     @default(0)
@@ -919,6 +963,20 @@ model AppSetting {
   suggestionWindowDays Int   @default(365)
   /// A typed figure this far from the window's average is flagged as out of line.
   outlierPct           Float @default(25)
+
+  /// What makes a buyer owe money: ORDER | INVOICE.
+  ///
+  /// ORDER (the default, and how the app has always worked) — a confirmed order is the
+  /// debt. INVOICE — only invoiced goods are, and a confirmed order not yet shipped
+  /// shows as *order book* instead.
+  ///
+  /// Switching this RESTATES every balance and statement on the next read, with no
+  /// migration and nothing to rebuild, because allocation is a pure function of
+  /// (buckets, payments) recomputed on every request — see lib/finance.ts. That is also
+  /// why the basis must be applied INSIDE `buildFinanceContext()` and nowhere else: a
+  /// route that branched on it separately would make the order page and the Payments
+  /// page disagree.
+  receivableBasis      String @default("ORDER")
 
   updatedAt DateTime @updatedAt
 }
@@ -1277,4 +1335,386 @@ model StatutoryPostingLine {
   @@unique([postingId, componentId, workerId])
   @@index([componentId])
   @@index([workerId])
+}
+
+// ---------------------------------------------------------------------------
+// Finished goods and sales
+//
+// The board ends at DONE. Everything below carries those pieces out of the factory:
+// what is finished, how it is packed, what fits in the container, what left, and what
+// was billed for it.
+//
+// The rule the whole section obeys: ONLY FACTS ARE STORED. There is no quantity on
+// hand, no packed count, no shipped count and no invoice total anywhere in it. Every
+// one of those is summed from these rows on read — the same discipline that makes
+// `StageMove` the single source of truth for where pieces are.
+// ---------------------------------------------------------------------------
+
+/// A box size the factory ships in, with what it can hold. Admin-defined DATA, seeded
+/// from `BUILTIN_CONTAINER_TYPES` exactly as `BUILTIN_METHODS` seeds the cost formulas
+/// and `BUILTIN_STATUTORY` the levies — a new box size is a row, not a release.
+///
+/// Master data, so `isActive` and NOT `deletedAt`: a second way to hide a row would mean
+/// two mechanisms doing one job (see lib/softDelete.ts).
+model ContainerType {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique // 20FT | 40FT | 40HQ | LCL
+  name        String
+  /// Usable internal volume in m3, and the most it may legally carry.
+  capacityCbm Float   @default(0)
+  payloadKg   Float   @default(0)
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  containers ShipmentContainer[]
+}
+
+/// Finished stock that did NOT come off the production board.
+///
+/// Board completions are deliberately absent from this table. `buildBoard()`'s DONE
+/// bucket is read live, so undoing a `StageMove` un-does the stock and a RETURN move
+/// reduces it for free. Writing a row here on COMPLETE as well would be two records of
+/// one fact, and they would drift the first time a movement was undone.
+///
+/// So this holds only what the board cannot know: an opening balance, damage, a physical
+/// count correction, and goods coming back from a buyer. Bought-in finished goods are not
+/// here either — they arrive as an ordinary supplier receipt (see `RawItem.productId`),
+/// so they bill through the supplier ledger without a second mechanism.
+model FinishedTxn {
+  id        Int    @id @default(autoincrement())
+  productId Int
+  /// ADJUST_IN | ADJUST_OUT | RETURN_IN
+  kind      String
+  /// Always POSITIVE. `kind` carries the direction, so a negative typed against an
+  /// ADJUST_OUT cannot quietly turn it back into a receipt — the same reason
+  /// `OrderCharge.kind` carries the sign rather than the amount.
+  qty       Int
+
+  /// Which order line's pieces these are. Null = FREE POOL: an opening balance,
+  /// over-production, bought-in goods and returns belong to no order, and any order may
+  /// draw on them.
+  orderLineId    Int?
+  /// What came back, on a RETURN_IN — so a return is explained by the dispatch it reverses.
+  shipmentLineId Int?
+
+  /// OPENING | DAMAGE | PHYSICAL_COUNT | RETURN, plus free text.
+  reason String?
+  note   String?
+
+  date        DateTime @default(now())
+  createdById Int?
+  createdAt   DateTime @default(now())
+
+  product      Product       @relation(fields: [productId], references: [id])
+  orderLine    OrderLine?    @relation(fields: [orderLineId], references: [id])
+  shipmentLine ShipmentLine? @relation(fields: [shipmentLineId], references: [id])
+
+  @@index([productId])
+  @@index([orderLineId])
+  @@index([date])
+}
+
+/// Finished pieces put into cartons, ready to load.
+///
+/// The carton count is DERIVED from `piecesPerCarton`, and the dimensions and weights are
+/// pre-filled from the product master — the packer overrides only what differs on the day.
+/// Everything the master supplied is SNAPSHOTTED here, because the master may legitimately
+/// be corrected later and a packing list already printed must not change.
+model PackingBatch {
+  id          Int  @id @default(autoincrement())
+  productId   Int
+  /// Null = free-pool goods, as on FinishedTxn.
+  orderLineId Int?
+
+  /// Pieces in this batch, and the boxes they went into.
+  qty         Int
+  cartonCount Int
+
+  /// SNAPSHOT of the master's figures at the moment of packing.
+  ///
+  /// `piecesPerCarton` is here because the carton count means nothing without it, and
+  /// because a part carton is only recognisable as one by comparing the two.
+  piecesPerCarton Int
+  packLengthIn    Float?
+  packWidthIn     Float?
+  packHeightIn    Float?
+  /// Per PIECE, matching how the product master stores them.
+  netWeightKg     Float?
+  grossWeightKg   Float?
+  /// Per PIECE, matching `Product.volumeAfterPackingCbm` — which is a per-piece figure,
+  /// NOT a per-carton one. Carton volume is this multiplied by the pieces in that carton.
+  /// Getting it wrong under-reports a load by a factor of `piecesPerCarton`.
+  cbmPerPiece     Float?
+
+  /// Set ONLY when the packer measured the box itself and it disagreed with the
+  /// dimensions. A separate column, so a printed CBM is always explained by either the
+  /// dimensions or an explicit human statement — never by an unattributable number.
+  cbmPerCartonOverride Float?
+
+  /// The marks stencilled on the boxes.
+  shippingMarks String?
+  note          String?
+
+  packedOn    DateTime @default(now())
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  product   Product    @relation(fields: [productId], references: [id])
+  orderLine OrderLine? @relation(fields: [orderLineId], references: [id])
+
+  lines ShipmentLine[]
+
+  @@index([productId])
+  @@index([orderLineId])
+}
+
+/// A physical dispatch: cartons in containers, leaving the factory.
+///
+/// A shipment carries NO MONEY AT ALL. Freight and insurance are charges on the invoice,
+/// through the same machinery a proforma and an order already use. Keeping money off this
+/// record is what makes "a shipment is fulfilment, an invoice is money" hold.
+///
+/// There is deliberately no `buyerId`. A container may be co-loaded for more than one
+/// buyer, and the buyer of any given carton is known from the order line behind its
+/// packing batch. The INVOICE is per buyer; the box need not be.
+model Shipment {
+  id     Int    @id @default(autoincrement())
+  number String @unique
+  /// PLANNED | LOADED | SHIPPED | DELIVERED | CANCELLED
+  status String @default("PLANNED")
+
+  shipDate DateTime?
+
+  /// Export paperwork. Printed on the invoice and the annexures.
+  shippingBillNo   String?
+  shippingBillDate DateTime?
+  portOfLoading    String?
+  portOfDischarge  String?
+  finalDestination String?
+  vesselOrFlight   String?
+  blAwbNo          String?
+  blAwbDate        DateTime?
+
+  /// Domestic movement paperwork. ALL OPTIONAL and typed in — there is no portal
+  /// integration here, exactly as the ICEGATE rates are pasted rather than scraped.
+  transporterName  String?
+  transporterGstin String?
+  vehicleNo        String?
+  ewayBillNo       String?
+  ewayBillDate     DateTime?
+
+  notes String?
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// Soft delete. Set instead of removing the row, so nothing is ever unrecoverable.
+  /// EVERY query that feeds a list or the money engine must filter `deletedAt: null` —
+  /// see lib/softDelete.ts. Filtering happens at the query layer, never inside the pure
+  /// functions. An INVOICED shipment cannot be deleted at all; cancel the invoice first.
+  deletedAt DateTime?
+
+  containers ShipmentContainer[]
+  lines      ShipmentLine[]
+  invoices   Invoice[]
+
+  @@index([status])
+  @@index([shipDate])
+  @@index([deletedAt])
+}
+
+/// One box on a shipment.
+model ShipmentContainer {
+  id              Int     @id @default(autoincrement())
+  shipmentId      Int
+  containerTypeId Int
+  containerNo     String?
+  sealNo          String?
+  /// The empty weight stencilled on the box. VGM is NOT stored — it is this plus the
+  /// derived gross of what went in, so it can never contradict the packing list.
+  tareWeightKg    Float?
+  note            String?
+  sortOrder       Int     @default(0)
+
+  shipment      Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  containerType ContainerType @relation(fields: [containerTypeId], references: [id])
+
+  lines ShipmentLine[]
+
+  @@index([shipmentId])
+  @@index([containerTypeId])
+}
+
+/// Cartons out of one packing batch, going into one container.
+model ShipmentLine {
+  id             Int  @id @default(autoincrement())
+  shipmentId     Int
+  packingBatchId Int
+  /// Null until the cartons are assigned to a box — an LCL load may never be.
+  containerId    Int?
+
+  /// BOTH are stored, and neither derives the other reliably: a short last carton breaks
+  /// `qty = cartons * piecesPerCarton`, and pieces are what stock and the invoice are
+  /// counted in while cartons are what space and weight are counted in. The route
+  /// validates that qty cannot exceed what that many cartons could hold.
+  cartons Int
+  qty     Int
+
+  sortOrder Int @default(0)
+
+  shipment     Shipment           @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  packingBatch PackingBatch       @relation(fields: [packingBatchId], references: [id])
+  container    ShipmentContainer? @relation(fields: [containerId], references: [id])
+
+  returns      FinishedTxn[]
+  invoiceLines InvoiceLine[]
+
+  @@index([shipmentId])
+  @@index([packingBatchId])
+  @@index([containerId])
+}
+
+/// What a buyer is billed for a dispatch. A commercial invoice for an export, a GST tax
+/// invoice for a domestic sale — one model, titled by market, exactly as a proforma is a
+/// Quotation domestically.
+///
+/// **It stores no total.** Its lines COPY their price inputs from the order line at the
+/// moment it is raised — the same thing accepting a proforma does when it copies charges
+/// onto the order — and every figure on it is then produced by `documentValueOf()` /
+/// `documentTotalsOf()` in lib/pricing.ts. That is how both rules hold at once: the
+/// document is frozen against a later correction to the order (the property
+/// `StatutoryPostingLine.wages` exists for), yet no figure on it can contradict the one
+/// pricing engine that the order page and the Payments page also read.
+///
+/// An invoice may span SEVERAL ORDERS of one buyer. It is per buyer, because tax and
+/// currency are.
+model Invoice {
+  id     Int    @id @default(autoincrement())
+  number String @unique
+  /// DRAFT | ISSUED | CANCELLED. A cancelled invoice KEEPS its number — a gap in an
+  /// invoice series is a compliance problem — and drops out of every total the way a
+  /// cancelled order does.
+  status String @default("DRAFT")
+
+  buyerId      Int
+  currencyId   Int?
+  /// The buyer currency's rateToBase, SNAPSHOTTED here as `Order.exchangeRate` is. A
+  /// currency change must restate it, or the invoice books a phantom forex movement.
+  exchangeRate Float?
+
+  invoiceDate DateTime  @default(now())
+  dueDate     DateTime?
+  /// The dispatch being billed. Optional only so a draft may exist for a moment before
+  /// its shipment is attached; the route refuses to ISSUE one without.
+  shipmentId  Int?
+
+  incoterms String?
+
+  /// The tax basis, SNAPSHOTTED when the document is created — the same discipline as
+  /// `Order.taxMarket`, and for the same reason. Read live, a later correction to the
+  /// buyer's state would reprint an issued invoice with a different tax split.
+  taxMarket       String?
+  taxBuyerState   String?
+  taxCompanyState String?
+
+  /// Domestic compliance, ALL OPTIONAL. `placeOfSupply` is recorded rather than derived,
+  /// because it is what the document must say it was even if the address is later fixed.
+  placeOfSupply String?
+  reverseCharge Boolean   @default(false)
+  irn           String?
+  ackNo         String?
+  ackDate       DateTime?
+  /// The e-invoice QR, through lib/imageUpload.ts like every other image — magic bytes,
+  /// not the declared mimetype. Named `invoice-qr-*` so it is identifiable on disk, and
+  /// unlinked when the invoice is destroyed.
+  qrFilename    String?
+
+  paymentTerms String?
+  bankDetails  String?
+  notes        String?
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// Soft delete — see Shipment.deletedAt.
+  deletedAt DateTime?
+
+  buyer    Buyer     @relation(fields: [buyerId], references: [id])
+  currency Currency? @relation(fields: [currencyId], references: [id])
+  shipment Shipment? @relation(fields: [shipmentId], references: [id])
+
+  lines   InvoiceLine[]
+  charges InvoiceCharge[]
+  ledger  LedgerEntry[]
+
+  @@index([buyerId])
+  @@index([shipmentId])
+  @@index([status])
+  @@index([invoiceDate])
+  @@index([deletedAt])
+}
+
+/// One billed line. The price inputs are COPIES, taken from the order line when the
+/// invoice was raised — never edited here, and there is no input in the UI to edit them
+/// with. Same shape and same maths as `OrderLine` / `ProformaLine`, so `lineNet()` in
+/// lib/pricing.ts prices all three.
+model InvoiceLine {
+  id        Int @id @default(autoincrement())
+  invoiceId Int
+  productId Int
+
+  /// Which order this line bills. This is what lets one invoice span several orders, and
+  /// it is what the per-order attribution of a receipt is built from under the INVOICE
+  /// receivable basis.
+  orderLineId    Int?
+  /// The dispatch this line bills, so the invoice reconciles to the packing list.
+  shipmentLineId Int?
+
+  qty       Int
+  unitPrice Float @default(0) // in invoice currency
+
+  discountPct Float @default(0)
+  discountAmt Float @default(0)
+
+  gstRatePct Float   @default(0)
+  hsnCode    String?
+
+  description String?
+  sortOrder   Int     @default(0)
+
+  invoice      Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product      Product       @relation(fields: [productId], references: [id])
+  orderLine    OrderLine?    @relation(fields: [orderLineId], references: [id])
+  shipmentLine ShipmentLine? @relation(fields: [shipmentLineId], references: [id])
+
+  @@index([invoiceId])
+  @@index([orderLineId])
+}
+
+/// Freight, insurance, packing — what turns an FOB price into CFR or CIF. Belongs to the
+/// whole document and carries its OWN gst rate rather than being apportioned across the
+/// lines, exactly as `OrderCharge` does; a percentage charge is a percentage of the line
+/// subtotal only, so charges never compound and the order they were entered in cannot
+/// change the total.
+model InvoiceCharge {
+  id         Int     @id @default(autoincrement())
+  invoiceId  Int
+  name       String
+  kind       String  @default("CHARGE") // CHARGE | DISCOUNT
+  amount     Float   @default(0)
+  pct        Float   @default(0)
+  gstRatePct Float   @default(0)
+  isTaxable  Boolean @default(true)
+  note       String?
+  sortOrder  Int     @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
 }

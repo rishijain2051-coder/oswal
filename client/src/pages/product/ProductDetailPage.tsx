@@ -123,7 +123,7 @@ export default function ProductDetailPage({ catalogueMode = false }: { catalogue
         style={{ marginBottom: 16 }}
         items={[
           { title: <Link to="/"><HomeOutlined /></Link> },
-          { title: <Link to="/products">Product Management</Link> },
+          { title: <Link to="/products">Products</Link> },
           catalogueMode
             ? { title: <Link to="/products/catalogue">Product Catalogue</Link> }
             : { title: <Link to="/products/list">Product Details</Link> },

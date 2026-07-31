@@ -174,7 +174,7 @@ export default function ScheduleDrawer({ order, line, onClose }: { order: Order;
               title: 'Plan vs actual',
               key: 'bar',
               render: (_, r) => {
-                if (!r.start || !r.end || !min) return <Text type="secondary" style={{ fontSize: 11 }}>not scheduled</Text>;
+                if (!r.start || !r.end || !min) return <Text type="secondary" style={{ fontSize: 12 }}>not scheduled</Text>;
                 const offset = (r.start.diff(min, 'day') / span) * 100;
                 const width = Math.max(3, ((r.end.diff(r.start, 'day') + 1) / span) * 100);
                 return (
@@ -204,7 +204,7 @@ export default function ScheduleDrawer({ order, line, onClose }: { order: Order;
                   <Tag color={STAGE_STATUS_COLOUR[r.status] ? undefined : 'default'} style={{ margin: 0 }}>
                     {r.status.replace('_', ' ').toLowerCase()}
                   </Tag>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
                     {r.at > 0 ? `${r.at} here` : r.cleared > 0 ? `${r.cleared} passed` : '—'}
                   </Text>
                 </Space>

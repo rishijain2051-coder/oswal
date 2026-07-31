@@ -11,6 +11,8 @@ import { live, notDeleted, restore, softDelete } from '../lib/softDelete';
 import { diffCostSheet, logChanges } from '../lib/changeLog';
 import type { MethodMap } from '../lib/costing';
 import { imageUploader, keepRealImages, uploadDir } from '../lib/imageUpload';
+import { like } from '../lib/search';
+import { trashedNote } from '../lib/references';
 
 const router = Router();
 router.use(authenticate);
@@ -308,7 +310,7 @@ router.get(
     const q = (req.query.q as string | undefined)?.trim();
     const numParam = (v: unknown) => (v != null && v !== '' ? Number(v) : undefined);
     const where: any = {};
-    if (q) where.OR = [{ factoryCode: { contains: q } }, { name: { contains: q } }, { alias: { contains: q } }];
+    if (q) where.OR = [{ factoryCode: like(q) }, { name: like(q) }, { alias: like(q) }];
     if (req.query.status) where.status = req.query.status;
     const filters: Array<[string, string]> = [
       ['productTypeId', 'productTypeId'],
@@ -500,7 +502,15 @@ router.delete(
     // Now the foreign keys really bite, so name them instead of letting one 500.
     const refs = await productReferences(id);
     if (refs.count > 0) {
-      throw new ApiError(409, `${existing.factoryCode} cannot be destroyed: ${refs.bits} still reference it. It can stay in the trash indefinitely.`);
+      // Those references may themselves be in the trash — an order you deleted still owns
+      // its lines, and they still point here. Say so, or the message names records the
+      // user cannot find anywhere.
+      const hidden = await trashedNote([
+        { model: 'operationSheet', where: { productId: id } },
+        { model: 'order', where: { lines: { some: { productId: id } } } },
+        { model: 'proforma', where: { lines: { some: { productId: id } } } },
+      ]);
+      throw new ApiError(409, `${existing.factoryCode} cannot be destroyed: ${refs.bits} still reference it.${hidden} It can stay in the trash indefinitely.`);
     }
 
     const images = await prisma.productImage.findMany({ where: { productId: id } });

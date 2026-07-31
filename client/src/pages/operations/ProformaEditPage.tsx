@@ -70,7 +70,7 @@ function ImagePicker({ productId, imageId, onPick }: { productId?: number | null
                   }}
                 >
                   <img src={im.url} alt="" style={{ width: 108, height: 108, objectFit: 'cover', borderRadius: 4, display: 'block' }} />
-                  <div style={{ textAlign: 'center', fontSize: 11, color: '#888' }}>{im.isPrimary ? 'primary' : im.caption || ''}</div>
+                  <div style={{ textAlign: 'center', fontSize: 12, color: '#888' }}>{im.isPrimary ? 'primary' : im.caption || ''}</div>
                 </div>
               );
             })}
@@ -322,7 +322,7 @@ export default function ProformaEditPage() {
         return (
           <span>
             {net !== gross && (
-              <Text type="secondary" delete style={{ fontSize: 11, display: 'block' }}>
+              <Text type="secondary" delete style={{ fontSize: 12, display: 'block' }}>
                 {money(gross, symbol)}
               </Text>
             )}
@@ -379,7 +379,7 @@ export default function ProformaEditPage() {
               <div style={{ marginTop: 4 }}>
                 <Tag color={domestic ? 'geekblue' : 'gold'}>{domestic ? 'Domestic' : 'Overseas'}</Tag>
                 <Tag>{buyer.channel === 'B2C' ? 'B2C' : 'B2B'}</Tag>
-                {domestic && <Text type="secondary" style={{ fontSize: 11 }}>{buyer.state ?? 'no state'}{buyer.gstNo ? ` · ${buyer.gstNo}` : ' · no GSTIN'}</Text>}
+                {domestic && <Text type="secondary" style={{ fontSize: 12 }}>{buyer.state ?? 'no state'}{buyer.gstNo ? ` · ${buyer.gstNo}` : ' · no GSTIN'}</Text>}
               </div>
             )}
           </Col>

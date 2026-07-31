@@ -39,6 +39,23 @@ export async function wipeOperational(prisma: PrismaClient): Promise<{ files: nu
   await prisma.orderLineStage.deleteMany();
   await prisma.operationSheet.deleteMany();
   await prisma.ledgerEntry.deleteMany();
+
+  // The sales side. AFTER the ledger, because a buyer receipt may name the invoice it was
+  // aimed at (`LedgerEntry.invoiceId`) and the invoice cannot go while a row points at it.
+  // Children before parents inside the block, so the rest of the list stays
+  // order-independent.
+  await prisma.invoiceCharge.deleteMany();
+  await prisma.invoiceLine.deleteMany();
+  await prisma.invoice.deleteMany();
+  // Finished-stock movements name the shipment line a return reverses, so they go BEFORE
+  // the shipment lines — relying on a SetNull referential action here would work but would
+  // leave the order of this list load-bearing in a way the comment above promises it is not.
+  await prisma.finishedTxn.deleteMany();
+  await prisma.shipmentLine.deleteMany();
+  await prisma.shipmentContainer.deleteMany();
+  await prisma.shipment.deleteMany();
+  // Last of the sales block: a shipment line REQUIRES its packing batch.
+  await prisma.packingBatch.deleteMany();
   // The scheduling overlay and the attachments hang off orders; clear them before the
   // orders themselves so this list stays order-independent.
   await prisma.stageSchedule.deleteMany();

@@ -723,3 +723,549 @@ export async function sheetPdf(input: SheetPdfInput): Promise<Buffer> {
 
   return finish(doc, out);
 }
+
+// ---------------------------------------------------------------------------
+// Commercial / tax invoice
+//
+// Titled by market — a domestic sale issues a TAX INVOICE under GST, an export a
+// COMMERCIAL INVOICE, which is a customs document and carries no tax. Its money comes from
+// `documentTotals()` exactly as the proforma's does, so the printed grand total is the same
+// figure the order page, the FIFO buckets and the dashboard read.
+// ---------------------------------------------------------------------------
+
+export interface InvoicePdfLine {
+  description: string;
+  qty: number;
+  unitPrice: number;
+  productCode?: string | null;
+  unit?: string | null;
+  discountPct?: number | null;
+  discountAmt?: number | null;
+  gstRatePct?: number | null;
+  hsnCode?: string | null;
+  orderNumber?: string | null;
+}
+
+export interface InvoicePdfInput {
+  number: string;
+  date: Date | string;
+  dueDate?: Date | string | null;
+  currencyCode: string;
+  company: CompanyProfile;
+  buyer: ProformaPdfInput['buyer'];
+  incoterms?: string | null;
+  paymentTerms?: string | null;
+  bankDetails?: string | null;
+  notes?: string | null;
+  placeOfSupply?: string | null;
+  reverseCharge?: boolean;
+  irn?: string | null;
+  ackNo?: string | null;
+  /** Export customs detail, printed only when present. */
+  shipment?: {
+    number?: string | null;
+    shipDate?: Date | string | null;
+    shippingBillNo?: string | null;
+    portOfLoading?: string | null;
+    portOfDischarge?: string | null;
+    finalDestination?: string | null;
+    vesselOrFlight?: string | null;
+    blAwbNo?: string | null;
+    transporterName?: string | null;
+    vehicleNo?: string | null;
+    ewayBillNo?: string | null;
+  } | null;
+  lines: InvoicePdfLine[];
+  charges?: PricedCharge[] | null;
+}
+
+export async function invoicePdf(input: InvoicePdfInput): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 40, bottom: 46, left: 40, right: 40 } });
+  const out = collect(doc);
+  const code = input.currencyCode || 'INR';
+
+  // One call to the pricing engine decides everything: the subtotal, the charges, whether
+  // tax applies at all and how it splits. The PDF never does its own arithmetic.
+  const totals = documentTotals(input.lines, input.charges ?? [], {
+    market: input.buyer.market ?? 'OVERSEAS',
+    buyerState: input.buyer.state ?? null,
+    companyState: input.company.state ?? null,
+  });
+  const taxed = totals.taxed;
+  const title = taxed ? 'TAX INVOICE' : 'COMMERCIAL INVOICE';
+
+  letterhead(doc, input.company, title, input.number, input.date);
+
+  const s = input.shipment;
+  partyBlock(
+    doc,
+    taxed ? 'BILL TO' : 'BUYER / CONSIGNEE',
+    [
+      input.buyer.name,
+      input.buyer.contactName ? `Attn: ${input.buyer.contactName}` : '',
+      ...(input.buyer.address ? input.buyer.address.split('\n') : []),
+      [input.buyer.state, input.buyer.country].filter(Boolean).join(', '),
+      input.buyer.email ?? '',
+      input.buyer.gstNo ? `GSTIN: ${input.buyer.gstNo}` : '',
+    ].filter(Boolean) as string[],
+    [
+      ['Currency', code],
+      ['Due date', input.dueDate ? fmtDate(input.dueDate) : ''],
+      ['Terms', input.paymentTerms ?? ''],
+      ...(!taxed ? ([['Incoterms', input.incoterms ?? '']] as [string, string][]) : []),
+      ...(taxed ? ([['Place of supply', input.placeOfSupply ?? '']] as [string, string][]) : []),
+      ...(taxed && input.reverseCharge ? ([['Reverse charge', 'Yes']] as [string, string][]) : []),
+      ...(taxed && input.irn ? ([['IRN', input.irn]] as [string, string][]) : []),
+      ...(taxed && input.ackNo ? ([['Ack no.', input.ackNo]] as [string, string][]) : []),
+      ...(s?.number ? ([['Dispatch', s.number]] as [string, string][]) : []),
+      ...(s?.shipDate ? ([['Shipped', fmtDate(s.shipDate)]] as [string, string][]) : []),
+    ]
+  );
+
+  // Customs and carriage detail as its own strip, so it cannot crowd the party block.
+  const detail: [string, string][] = taxed
+    ? [
+        ['Transporter', s?.transporterName ?? ''],
+        ['Vehicle', s?.vehicleNo ?? ''],
+        ['E-way bill', s?.ewayBillNo ?? ''],
+      ]
+    : [
+        ['Shipping bill', s?.shippingBillNo ?? ''],
+        ['Port of loading', s?.portOfLoading ?? ''],
+        ['Port of discharge', s?.portOfDischarge ?? ''],
+        ['Final destination', s?.finalDestination ?? ''],
+        ['Vessel / flight', s?.vesselOrFlight ?? ''],
+        ['BL / AWB', s?.blAwbNo ?? ''],
+      ];
+  const shown = detail.filter(([, v]) => v);
+  if (shown.length) {
+    const left = doc.page.margins.left;
+    const w = doc.page.width - left - doc.page.margins.right;
+    const per = w / 3;
+    let rowTop = doc.y;
+    let col = 0;
+    for (const [k, v] of shown) {
+      const x = left + (col % 3) * per;
+      doc.font('Helvetica').fontSize(7.5).fillColor(GREY).text(safe(k), x, rowTop, { width: per - 8 });
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#000000').text(safe(v), x, doc.y, { width: per - 8 });
+      col++;
+      if (col % 3 === 0) rowTop = doc.y + 4;
+    }
+    doc.y = Math.max(doc.y, rowTop) + 12;
+    doc.fillColor('#000000');
+  }
+
+  const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const cols: Col[] = taxed
+    ? [
+        { key: 'i', title: '#', width: 22, align: 'right' },
+        { key: 'desc', title: 'Description', width: totalW - 22 - 52 - 40 - 38 - 74 - 34 - 84 },
+        { key: 'hsn', title: 'HSN', width: 52 },
+        { key: 'qty', title: 'Qty', width: 40, align: 'right' },
+        { key: 'unit', title: 'Unit', width: 38 },
+        { key: 'rate', title: 'Rate', width: 74, align: 'right' },
+        { key: 'gst', title: 'GST', width: 34, align: 'right' },
+        { key: 'amt', title: 'Amount', width: 84, align: 'right' },
+      ]
+    : [
+        { key: 'i', title: '#', width: 22, align: 'right' },
+        { key: 'desc', title: 'Description', width: totalW - 22 - 46 - 40 - 38 - 84 - 92 },
+        { key: 'hsn', title: 'HSN', width: 46 },
+        { key: 'qty', title: 'Qty', width: 40, align: 'right' },
+        { key: 'unit', title: 'Unit', width: 38 },
+        { key: 'rate', title: 'Rate', width: 84, align: 'right' },
+        { key: 'amt', title: 'Amount', width: 92, align: 'right' },
+      ];
+
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 30;
+  let y = tableHeader(doc, cols, doc.y);
+
+  input.lines.forEach((l, idx) => {
+    const desc = [l.productCode ? `${l.productCode} - ${l.description}` : l.description, l.orderNumber ? `Order ${l.orderNumber}` : '']
+      .filter(Boolean)
+      .join('\n');
+    const rowH = Math.max(24, doc.font('Helvetica').fontSize(9).heightOfString(safe(desc), { width: cols[1].width - 10 }) + 12);
+    if (y + rowH > bottomLimit()) {
+      doc.addPage();
+      y = tableHeader(doc, cols, doc.page.margins.top);
+    }
+    // The engine's own line maths, so a printed line cannot disagree with the subtotal.
+    const amt = lineNet(l);
+    let x = doc.page.margins.left;
+    const cell = (c: Col, text: string, bold = false) => {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor('#000000');
+      doc.text(safe(text), x + 5, y + 6, { width: c.width - 10, align: c.align ?? 'left' });
+    };
+    for (const c of cols) {
+      if (c.key === 'i') cell(c, String(idx + 1));
+      else if (c.key === 'desc') cell(c, desc);
+      else if (c.key === 'hsn') cell(c, l.hsnCode ?? '');
+      else if (c.key === 'qty') cell(c, String(l.qty));
+      else if (c.key === 'unit') cell(c, l.unit ?? 'PCS');
+      else if (c.key === 'rate') cell(c, amount(l.unitPrice, code));
+      else if (c.key === 'gst') cell(c, `${l.gstRatePct ?? 0}%`);
+      else cell(c, amount(amt, code), true);
+      x += c.width;
+    }
+    y += rowH;
+    hline(doc, y, totalW);
+  });
+
+  y = totalsStack(doc, totals, code, y, totalW, bottomLimit);
+  doc.y = y + 14;
+
+  if (!taxed) {
+    doc.font('Helvetica').fontSize(8).fillColor(GREY);
+    doc.text(safe('Supply meant for export - zero rated. No GST is charged on this invoice.'), doc.page.margins.left, doc.y, { width: totalW });
+    doc.y += 6;
+  }
+  for (const [heading, body] of [
+    ['BANK DETAILS', input.bankDetails],
+    ['NOTES', input.notes],
+  ] as [string, string | null | undefined][]) {
+    if (!body) continue;
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(BROWN).text(heading, doc.page.margins.left, doc.y + 4);
+    doc.font('Helvetica').fontSize(8.5).fillColor('#000000').text(safe(body), doc.page.margins.left, doc.y, { width: totalW });
+  }
+
+  doc.font('Helvetica').fontSize(8).fillColor(GREY);
+  doc.text(safe(`For ${input.company.legalName}`), doc.page.margins.left, doc.y + 26, { width: totalW, align: 'right' });
+  doc.text(safe('Authorised signatory'), doc.page.margins.left, doc.y + 4, { width: totalW, align: 'right' });
+
+  return finish(doc, out);
+}
+
+// ---------------------------------------------------------------------------
+// Packing list, VGM, container annexure, certificate of origin
+//
+// These carry NO MONEY at all — a shipment is fulfilment, an invoice is money. Every figure
+// on them comes from the shipping engine, so a carton count or a CBM here is the same one
+// the shipment page showed.
+// ---------------------------------------------------------------------------
+
+export interface ShipmentPdfLine {
+  productCode?: string | null;
+  description: string;
+  orderNumber?: string | null;
+  buyerName?: string | null;
+  shippingMarks?: string | null;
+  cartons: number;
+  qty: number;
+  netKg: number;
+  grossKg: number;
+  cbm: number;
+  containerNo?: string | null;
+  hsnCode?: string | null;
+}
+
+export interface ShipmentPdfContainer {
+  code: string;
+  containerNo?: string | null;
+  sealNo?: string | null;
+  tareWeightKg?: number | null;
+  cartons: number;
+  netKg: number;
+  grossKg: number;
+  cbm: number;
+  vgmKg: number;
+  capacityCbm: number;
+  payloadKg: number;
+  cbmPct: number;
+  kgPct: number;
+}
+
+export interface ShipmentPdfInput {
+  number: string;
+  date: Date | string;
+  company: CompanyProfile;
+  status: string;
+  shippingBillNo?: string | null;
+  portOfLoading?: string | null;
+  portOfDischarge?: string | null;
+  finalDestination?: string | null;
+  vesselOrFlight?: string | null;
+  blAwbNo?: string | null;
+  buyerNames: string[];
+  orderNumbers: string[];
+  totals: { cartons: number; pieces: number; cbm: number; netKg: number; grossKg: number };
+  containers: ShipmentPdfContainer[];
+  lines: ShipmentPdfLine[];
+  notes?: string | null;
+}
+
+/** The shared header for all four shipment documents. */
+function shipmentHead(doc: Doc, input: ShipmentPdfInput, title: string) {
+  letterhead(doc, input.company, title, input.number, input.date);
+  partyBlock(doc, 'CONSIGNEE(S)', input.buyerNames.length ? input.buyerNames : ['-'], [
+    ['Orders', input.orderNumbers.join(', ')],
+    ['Shipping bill', input.shippingBillNo ?? ''],
+    ['Port of loading', input.portOfLoading ?? ''],
+    ['Port of discharge', input.portOfDischarge ?? ''],
+    ['Final destination', input.finalDestination ?? ''],
+    ['Vessel / flight', input.vesselOrFlight ?? ''],
+    ['BL / AWB', input.blAwbNo ?? ''],
+  ]);
+}
+
+const num = (v: number, dp = 2) => (isFinite(v) ? v.toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp }) : '-');
+
+export async function packingListPdf(input: ShipmentPdfInput): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margins: { top: 40, bottom: 46, left: 40, right: 40 } });
+  const out = collect(doc);
+  shipmentHead(doc, input, 'PACKING LIST');
+
+  const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const cols: Col[] = [
+    { key: 'i', title: '#', width: 22, align: 'right' },
+    { key: 'desc', title: 'Description', width: totalW - 22 - 74 - 74 - 46 - 50 - 44 - 64 - 64 - 56 },
+    { key: 'order', title: 'Order', width: 74 },
+    { key: 'marks', title: 'Marks', width: 74 },
+    { key: 'hsn', title: 'HSN', width: 46 },
+    { key: 'ctn', title: 'Cartons', width: 50, align: 'right' },
+    { key: 'qty', title: 'Pcs', width: 44, align: 'right' },
+    { key: 'net', title: 'Net kg', width: 64, align: 'right' },
+    { key: 'gross', title: 'Gross kg', width: 64, align: 'right' },
+    { key: 'cbm', title: 'CBM', width: 56, align: 'right' },
+  ];
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 40;
+  let y = tableHeader(doc, cols, doc.y);
+
+  input.lines.forEach((l, idx) => {
+    const desc = l.productCode ? `${l.productCode} - ${l.description}` : l.description;
+    const rowH = Math.max(20, doc.font('Helvetica').fontSize(8.5).heightOfString(safe(desc), { width: cols[1].width - 10 }) + 10);
+    if (y + rowH > bottomLimit()) {
+      doc.addPage();
+      y = tableHeader(doc, cols, doc.page.margins.top);
+    }
+    let x = doc.page.margins.left;
+    const cell = (c: Col, text: string) => {
+      doc.font('Helvetica').fontSize(8.5).fillColor('#000000');
+      doc.text(safe(text), x + 5, y + 5, { width: c.width - 10, align: c.align ?? 'left' });
+    };
+    for (const c of cols) {
+      if (c.key === 'i') cell(c, String(idx + 1));
+      else if (c.key === 'desc') cell(c, desc);
+      else if (c.key === 'order') cell(c, l.orderNumber ?? '');
+      else if (c.key === 'marks') cell(c, l.shippingMarks ?? '');
+      else if (c.key === 'hsn') cell(c, l.hsnCode ?? '');
+      else if (c.key === 'ctn') cell(c, String(l.cartons));
+      else if (c.key === 'qty') cell(c, String(l.qty));
+      else if (c.key === 'net') cell(c, num(l.netKg));
+      else if (c.key === 'gross') cell(c, num(l.grossKg));
+      else cell(c, num(l.cbm, 4));
+      x += c.width;
+    }
+    y += rowH;
+    hline(doc, y, totalW);
+  });
+
+  // The totals row comes from the engine — never a sum of what was printed above.
+  if (y + 24 > bottomLimit()) {
+    doc.addPage();
+    y = doc.page.margins.top;
+  }
+  doc.rect(doc.page.margins.left, y, totalW, 22).fill(LIGHT);
+  let tx = doc.page.margins.left;
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(BROWN);
+  for (const c of cols) {
+    const text =
+      c.key === 'desc'
+        ? 'TOTAL'
+        : c.key === 'ctn'
+          ? String(input.totals.cartons)
+          : c.key === 'qty'
+            ? String(input.totals.pieces)
+            : c.key === 'net'
+              ? num(input.totals.netKg)
+              : c.key === 'gross'
+                ? num(input.totals.grossKg)
+                : c.key === 'cbm'
+                  ? num(input.totals.cbm, 4)
+                  : '';
+    if (text) doc.text(safe(text), tx + 5, y + 6, { width: c.width - 10, align: c.align ?? 'left' });
+    tx += c.width;
+  }
+  doc.fillColor('#000000');
+  doc.y = y + 34;
+
+  if (input.notes) doc.font('Helvetica').fontSize(8.5).text(safe(input.notes), doc.page.margins.left, doc.y, { width: totalW });
+  return finish(doc, out);
+}
+
+/**
+ * Verified gross mass. `vgmKg` is always tare + the derived cargo gross — it is never
+ * stored, so this declaration cannot contradict the packing list it travels with.
+ */
+export async function vgmPdf(input: ShipmentPdfInput): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 40, bottom: 46, left: 40, right: 40 } });
+  const out = collect(doc);
+  shipmentHead(doc, input, 'VERIFIED GROSS MASS');
+
+  const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const cols: Col[] = [
+    { key: 'ctr', title: 'Container', width: 96 },
+    { key: 'type', title: 'Type', width: 56 },
+    { key: 'seal', title: 'Seal', width: 78 },
+    { key: 'ctn', title: 'Cartons', width: 54, align: 'right' },
+    { key: 'cargo', title: 'Cargo kg', width: 72, align: 'right' },
+    { key: 'tare', title: 'Tare kg', width: 68, align: 'right' },
+    { key: 'vgm', title: 'VGM kg', width: totalW - 96 - 56 - 78 - 54 - 72 - 68, align: 'right' },
+  ];
+  let y = tableHeader(doc, cols, doc.y);
+
+  for (const c of input.containers) {
+    let x = doc.page.margins.left;
+    const cell = (col: Col, text: string, bold = false) => {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor('#000000');
+      doc.text(safe(text), x + 5, y + 6, { width: col.width - 10, align: col.align ?? 'left' });
+    };
+    for (const col of cols) {
+      if (col.key === 'ctr') cell(col, c.containerNo || '(not numbered)');
+      else if (col.key === 'type') cell(col, c.code);
+      else if (col.key === 'seal') cell(col, c.sealNo ?? '');
+      else if (col.key === 'ctn') cell(col, String(c.cartons));
+      else if (col.key === 'cargo') cell(col, num(c.grossKg));
+      else if (col.key === 'tare') cell(col, num(c.tareWeightKg ?? 0));
+      else cell(col, num(c.vgmKg), true);
+      x += col.width;
+    }
+    y += 22;
+    hline(doc, y, totalW);
+  }
+  doc.y = y + 18;
+
+  doc.font('Helvetica').fontSize(8.5).fillColor('#000000');
+  doc.text(
+    safe(
+      'The gross mass above is the container tare plus the derived cargo gross, declared under SOLAS Chapter VI Regulation 2, Method 2 (calculated).'
+    ),
+    doc.page.margins.left,
+    doc.y,
+    { width: totalW }
+  );
+  doc.text(safe(`For ${input.company.legalName}`), doc.page.margins.left, doc.y + 30, { width: totalW, align: 'right' });
+  doc.font('Helvetica').fontSize(8).fillColor(GREY).text(safe('Authorised signatory'), doc.page.margins.left, doc.y + 4, { width: totalW, align: 'right' });
+  return finish(doc, out);
+}
+
+/** What is in each box, container by container. */
+export async function containerAnnexurePdf(input: ShipmentPdfInput): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 40, bottom: 46, left: 40, right: 40 } });
+  const out = collect(doc);
+  shipmentHead(doc, input, 'CONTAINER ANNEXURE');
+
+  const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 30;
+
+  const groups: { label: string; sub: string; lines: ShipmentPdfLine[] }[] = input.containers.map((c) => ({
+    label: `${c.containerNo || '(not numbered)'} - ${c.code}`,
+    sub: `${c.cartons} carton(s) - ${num(c.cbm, 3)} CBM${c.capacityCbm > 0 ? ` of ${num(c.capacityCbm, 0)} (${num(c.cbmPct, 0)}%)` : ''} - gross ${num(c.grossKg)} kg - VGM ${num(c.vgmKg)} kg`,
+    lines: input.lines.filter((l) => (l.containerNo ?? null) === (c.containerNo ?? null)),
+  }));
+  // Cartons nobody has put in a box: an LCL part load may stay that way, and leaving them
+  // out would make this annexure disagree with the packing list.
+  const loose = input.lines.filter((l) => !l.containerNo);
+  if (loose.length && !input.containers.some((c) => !c.containerNo)) {
+    groups.push({ label: 'NOT IN A CONTAINER', sub: 'Part load / LCL', lines: loose });
+  }
+
+  for (const g of groups) {
+    if (doc.y + 60 > bottomLimit()) doc.addPage();
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(BROWN).text(safe(g.label), doc.page.margins.left, doc.y + 6);
+    doc.font('Helvetica').fontSize(8).fillColor(GREY).text(safe(g.sub), doc.page.margins.left, doc.y, { width: totalW });
+    doc.fillColor('#000000');
+    doc.y += 6;
+
+    const cols: Col[] = [
+      { key: 'desc', title: 'Description', width: totalW - 80 - 56 - 44 - 70 - 56 },
+      { key: 'order', title: 'Order', width: 80 },
+      { key: 'marks', title: 'Marks', width: 56 },
+      { key: 'ctn', title: 'Ctns', width: 44, align: 'right' },
+      { key: 'gross', title: 'Gross kg', width: 70, align: 'right' },
+      { key: 'cbm', title: 'CBM', width: 56, align: 'right' },
+    ];
+    let y = tableHeader(doc, cols, doc.y);
+    for (const l of g.lines) {
+      if (y + 20 > bottomLimit()) {
+        doc.addPage();
+        y = tableHeader(doc, cols, doc.page.margins.top);
+      }
+      let x = doc.page.margins.left;
+      const cell = (c: Col, text: string) => {
+        doc.font('Helvetica').fontSize(8.5).fillColor('#000000');
+        doc.text(safe(text), x + 5, y + 5, { width: c.width - 10, align: c.align ?? 'left' });
+      };
+      for (const c of cols) {
+        if (c.key === 'desc') cell(c, l.productCode ? `${l.productCode} - ${l.description}` : l.description);
+        else if (c.key === 'order') cell(c, l.orderNumber ?? '');
+        else if (c.key === 'marks') cell(c, l.shippingMarks ?? '');
+        else if (c.key === 'ctn') cell(c, String(l.cartons));
+        else if (c.key === 'gross') cell(c, num(l.grossKg));
+        else cell(c, num(l.cbm, 4));
+        x += c.width;
+      }
+      y += 20;
+      hline(doc, y, totalW);
+    }
+    doc.y = y + 12;
+  }
+  return finish(doc, out);
+}
+
+/** A certificate-of-origin style annexure. Declarative — it carries no money. */
+export async function certificateOfOriginPdf(input: ShipmentPdfInput): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 40, bottom: 46, left: 40, right: 40 } });
+  const out = collect(doc);
+  shipmentHead(doc, input, 'CERTIFICATE OF ORIGIN');
+
+  const totalW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const cols: Col[] = [
+    { key: 'i', title: '#', width: 22, align: 'right' },
+    { key: 'desc', title: 'Description of goods', width: totalW - 22 - 56 - 50 - 46 - 70 },
+    { key: 'hsn', title: 'HSN', width: 56 },
+    { key: 'ctn', title: 'Ctns', width: 50, align: 'right' },
+    { key: 'qty', title: 'Pcs', width: 46, align: 'right' },
+    { key: 'gross', title: 'Gross kg', width: 70, align: 'right' },
+  ];
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 90;
+  let y = tableHeader(doc, cols, doc.y);
+
+  input.lines.forEach((l, idx) => {
+    if (y + 20 > bottomLimit()) {
+      doc.addPage();
+      y = tableHeader(doc, cols, doc.page.margins.top);
+    }
+    let x = doc.page.margins.left;
+    const cell = (c: Col, text: string) => {
+      doc.font('Helvetica').fontSize(8.5).fillColor('#000000');
+      doc.text(safe(text), x + 5, y + 5, { width: c.width - 10, align: c.align ?? 'left' });
+    };
+    for (const c of cols) {
+      if (c.key === 'i') cell(c, String(idx + 1));
+      else if (c.key === 'desc') cell(c, l.productCode ? `${l.productCode} - ${l.description}` : l.description);
+      else if (c.key === 'hsn') cell(c, l.hsnCode ?? '');
+      else if (c.key === 'ctn') cell(c, String(l.cartons));
+      else if (c.key === 'qty') cell(c, String(l.qty));
+      else cell(c, num(l.grossKg));
+      x += c.width;
+    }
+    y += 20;
+    hline(doc, y, totalW);
+  });
+
+  doc.y = y + 18;
+  doc.font('Helvetica').fontSize(9).fillColor('#000000');
+  doc.text(
+    safe(
+      `We hereby certify that the goods described above are of Indian origin, manufactured by ${input.company.legalName}${
+        input.company.city ? `, ${input.company.city}` : ''
+      }, India, and that the particulars given are true and correct.`
+    ),
+    doc.page.margins.left,
+    doc.y,
+    { width: totalW }
+  );
+  doc.text(safe(`For ${input.company.legalName}`), doc.page.margins.left, doc.y + 34, { width: totalW, align: 'right' });
+  doc.font('Helvetica').fontSize(8).fillColor(GREY).text(safe('Authorised signatory'), doc.page.margins.left, doc.y + 4, { width: totalW, align: 'right' });
+  return finish(doc, out);
+}

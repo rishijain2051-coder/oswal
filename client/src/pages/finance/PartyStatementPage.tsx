@@ -54,7 +54,7 @@ function statementCols(symbol: string): ColumnsType<StatementRow> {
         <div>
           <div>{v}</div>
           {r.detail && (
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               {r.detail}
             </Text>
           )}
@@ -63,7 +63,7 @@ function statementCols(symbol: string): ColumnsType<StatementRow> {
     },
     { title: 'Ref', dataIndex: 'ref', width: 130, render: (v) => v || '—' },
     { title: 'Charge', dataIndex: 'charge', align: 'right', width: 120, render: (v) => (v ? money(v, symbol) : '—') },
-    { title: 'Settled', dataIndex: 'settle', align: 'right', width: 120, render: (v) => (v ? <span style={{ color: '#389e0d' }}>{money(v, symbol)}</span> : '—') },
+    { title: 'Settled', dataIndex: 'settle', align: 'right', width: 120, render: (v) => (v ? <span style={{ color: '#237804' }}>{money(v, symbol)}</span> : '—') },
     { title: 'Balance', dataIndex: 'balance', align: 'right', width: 130, render: (v) => <b style={{ color: v > 0 ? '#cf1322' : v < 0 ? '#1677ff' : '#999' }}>{money(v, symbol)}</b> },
   ];
 }
@@ -105,7 +105,7 @@ export default function PartyStatementPage() {
   });
 
   if (isLoading) return <Skeleton active paragraph={{ rows: 8 }} />;
-  if (isError || !data) return <Result status="404" title="Party not found" extra={<Button onClick={() => navigate('/operations/payments')}>Back to Payments</Button>} />;
+  if (isError || !data) return <Result status="404" title="Party not found" extra={<Button onClick={() => navigate('/finance/payments')}>Back to Payments</Button>} />;
 
   const meta = PARTY_META[type];
   const isBuyer = type === 'BUYER';
@@ -116,8 +116,8 @@ export default function PartyStatementPage() {
         style={{ marginBottom: 16 }}
         items={[
           { title: <Link to="/"><HomeOutlined /></Link> },
-          { title: <Link to="/operations">Operations</Link> },
-          { title: <Link to="/operations/payments">Payments</Link> },
+          { title: <Link to="/finance">Finance</Link> },
+          { title: <Link to="/finance/payments">Payments</Link> },
           { title: data.party.name },
         ]}
       />
@@ -132,7 +132,7 @@ export default function PartyStatementPage() {
           {data.party.code && <Text type="secondary">{data.party.code}</Text>}
         </Space>
         <Space wrap>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/operations/payments')}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/finance/payments')}>
             Back
           </Button>
           <Button icon={<PrinterOutlined />} onClick={() => window.print()}>
@@ -168,10 +168,10 @@ export default function PartyStatementPage() {
                   <Statistic title="Invoiced" value={money(c.invoiced, c.symbol)} valueStyle={{ fontSize: 18 }} />
                 </Col>
                 <Col xs={12} md={6}>
-                  <Statistic title="Received" value={money(c.received, c.symbol)} valueStyle={{ fontSize: 18, color: '#389e0d' }} />
+                  <Statistic title="Received" value={money(c.received, c.symbol)} valueStyle={{ fontSize: 18, color: '#237804' }} />
                 </Col>
                 <Col xs={12} md={6}>
-                  <Statistic title="Still to collect" value={money(c.balance, c.symbol)} valueStyle={{ fontSize: 18, color: c.balance > 0 ? '#cf1322' : '#389e0d' }} />
+                  <Statistic title="Still to collect" value={money(c.balance, c.symbol)} valueStyle={{ fontSize: 18, color: c.balance > 0 ? '#cf1322' : '#237804' }} />
                 </Col>
                 <Col xs={12} md={6}>
                   <Statistic title="Held on account" value={money(c.credit, c.symbol)} valueStyle={{ fontSize: 18, color: c.credit > 0 ? '#1677ff' : '#999' }} />
@@ -199,7 +199,7 @@ export default function PartyStatementPage() {
                           { title: 'Date', dataIndex: 'date', width: 110, render: (d) => dayjs(d).format('DD MMM YY') },
                           { title: 'Status', dataIndex: 'status', width: 110, render: (s) => <Tag>{s}</Tag> },
                           { title: 'Value', dataIndex: 'gross', align: 'right', width: 140, render: (v) => money(v, c.symbol) },
-                          { title: 'Received', dataIndex: 'paid', align: 'right', width: 140, render: (v) => <span style={{ color: '#389e0d' }}>{money(v, c.symbol)}</span> },
+                          { title: 'Received', dataIndex: 'paid', align: 'right', width: 140, render: (v) => <span style={{ color: '#237804' }}>{money(v, c.symbol)}</span> },
                           { title: 'Balance', dataIndex: 'balance', align: 'right', width: 140, render: (v) => <b style={{ color: v > 0 ? '#cf1322' : '#999' }}>{money(v, c.symbol)}</b> },
                         ]}
                       />
@@ -281,29 +281,29 @@ export default function PartyStatementPage() {
           <Col xs={12} md={5}>
             <Statistic title={isJobwork ? 'Earned by them' : 'Billed to us'} value={money(s.accrued, symbol)} valueStyle={{ fontSize: 18 }} />
             {isJobwork && (
-              <Text type="secondary" style={{ fontSize: 11 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
                 {s.pieces} pcs over {s.events} clearance(s)
               </Text>
             )}
           </Col>
           <Col xs={12} md={5}>
-            <Statistic title="Paid" value={money(s.paid, symbol)} valueStyle={{ fontSize: 18, color: '#389e0d' }} />
+            <Statistic title="Paid" value={money(s.paid, symbol)} valueStyle={{ fontSize: 18, color: '#237804' }} />
           </Col>
           <Col xs={12} md={5}>
-            <Statistic title="Still to pay" value={money(s.balance, symbol)} valueStyle={{ fontSize: 18, color: s.balance > 0 ? '#cf1322' : '#389e0d' }} />
+            <Statistic title="Still to pay" value={money(s.balance, symbol)} valueStyle={{ fontSize: 18, color: s.balance > 0 ? '#cf1322' : '#237804' }} />
           </Col>
           <Col xs={12} md={5}>
             <Statistic title="Paid in advance" value={money(s.credit, symbol)} valueStyle={{ fontSize: 18, color: s.credit > 0 ? '#1677ff' : '#999' }} />
           </Col>
           {type === 'SUPPLIER' && (data.unbilledValue ?? 0) > 0 && (
             <Col xs={12} md={4}>
-              <Statistic title="Delivered, not billed" value={money(data.unbilledValue ?? 0, symbol)} valueStyle={{ fontSize: 18, color: '#d48806' }} />
+              <Statistic title="Delivered, not billed" value={money(data.unbilledValue ?? 0, symbol)} valueStyle={{ fontSize: 18, color: '#874d00' }} />
             </Col>
           )}
           {wf?.dueNow != null && (
             <Col xs={12} md={4}>
               <Tooltip title="What can be handed over today, after each advance's monthly recovery. Due now less the advance outstanding is exactly the balance.">
-                <Statistic title="Due now" value={money(wf.dueNow, symbol)} valueStyle={{ fontSize: 18, color: wf.dueNow > 0 ? '#cf1322' : '#389e0d' }} />
+                <Statistic title="Due now" value={money(wf.dueNow, symbol)} valueStyle={{ fontSize: 18, color: wf.dueNow > 0 ? '#cf1322' : '#237804' }} />
               </Tooltip>
             </Col>
           )}
@@ -442,7 +442,7 @@ export default function PartyStatementPage() {
                     },
                     ...(isJobwork ? [{ title: 'Pieces', dataIndex: 'pieces', align: 'right' as const, width: 90 }] : []),
                     { title: isJobwork ? 'Earned' : 'Billed', dataIndex: 'gross', align: 'right' as const, width: 140, render: (v: number) => money(v, symbol) },
-                    { title: 'Paid', dataIndex: 'paid', align: 'right' as const, width: 140, render: (v: number) => <span style={{ color: '#389e0d' }}>{money(v, symbol)}</span> },
+                    { title: 'Paid', dataIndex: 'paid', align: 'right' as const, width: 140, render: (v: number) => <span style={{ color: '#237804' }}>{money(v, symbol)}</span> },
                     { title: 'Balance', dataIndex: 'balance', align: 'right' as const, width: 140, render: (v: number) => <b style={{ color: v > 0 ? '#cf1322' : '#999' }}>{money(v, symbol)}</b> },
                   ]}
                 />
@@ -501,7 +501,7 @@ export default function PartyStatementPage() {
                   <td>{dayjs(r.date).format('DD MMM YY')}</td>
                   <td>
                     {r.description}
-                    {r.detail ? <div style={{ color: '#999', fontSize: 11 }}>{r.detail}</div> : null}
+                    {r.detail ? <div style={{ color: '#999', fontSize: 12 }}>{r.detail}</div> : null}
                   </td>
                   <td style={{ textAlign: 'right' }}>{r.charge ? num(r.charge, 2) : ''}</td>
                   <td style={{ textAlign: 'right' }}>{r.settle ? num(r.settle, 2) : ''}</td>

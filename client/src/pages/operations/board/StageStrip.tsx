@@ -75,7 +75,7 @@ export default function StageStrip({ order, line, editable, onMove }: { order: O
             </Tooltip>
           )}
           {stage && stage.cleared > 0 && stage.at === 0 && (
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               {stage.cleared} passed
             </Text>
           )}
@@ -89,7 +89,13 @@ export default function StageStrip({ order, line, editable, onMove }: { order: O
               onConfirm={() => quickClear.mutate({ from: e, to: target, qty: count })}
             >
               <Tooltip title={`Pass all ${count} → ${labelOf(target)}`}>
-                <Button size="small" type="text" icon={<CheckOutlined />} loading={quickClear.isPending} />
+                <Button
+                  size="small"
+                  type="text"
+                  aria-label={`Pass all ${count} pieces on to ${labelOf(target)}`}
+                  icon={<CheckOutlined />}
+                  loading={quickClear.isPending}
+                />
               </Tooltip>
             </Popconfirm>
           </div>

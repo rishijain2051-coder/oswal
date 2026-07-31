@@ -116,7 +116,15 @@ export default function MusterPage() {
             <Button size="small" onClick={() => setDate(date.subtract(1, 'day'))}>
               ‹ previous
             </Button>
-            <DatePicker value={date} onChange={(d) => d && setDate(d)} format="ddd DD MMM YYYY" allowClear={false} disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
+            <DatePicker
+              id="muster-date"
+              name="muster-date"
+              value={date}
+              onChange={(d) => d && setDate(d)}
+              format="ddd DD MMM YYYY"
+              allowClear={false}
+              disabledDate={(d) => d.isAfter(dayjs(), 'day')}
+            />
             <Button size="small" disabled={date.isSame(dayjs(), 'day')} onClick={() => setDate(date.add(1, 'day'))}>
               next ›
             </Button>
@@ -124,7 +132,9 @@ export default function MusterPage() {
               today
             </Button>
           </Space>
-          <Input allowClear placeholder="Find a worker…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 200 }} />
+          {/* id/name so the browser can identify the field; autoComplete off because a
+              filter term is not data worth remembering. */}
+          <Input id="muster-search" name="muster-search" autoComplete="off" allowClear placeholder="Find a worker…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 200 }} />
           <Text type="secondary">
             {counts.present} present · {counts.away} away · {counts.half} half day{counts.ot ? ` · ${num(counts.ot, 1)} OT h` : ''}
           </Text>

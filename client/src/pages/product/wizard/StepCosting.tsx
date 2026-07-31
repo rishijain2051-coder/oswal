@@ -272,7 +272,7 @@ export default function StepCosting({ draft, set, productId }: { draft: WizardDr
               {/* Fixed column labels */}
               <div style={{ display: 'flex', gap: 6, marginBottom: 4, overflowX: 'auto', paddingBottom: 2 }}>
                 {cols.map((c) => (
-                  <div key={c.key} style={{ width: c.width, fontSize: 11, color: '#8c8c8c', fontWeight: 600, textAlign: c.kind === 'measure' || c.kind === 'amount' ? 'right' : 'left', flex: 'none' }}>
+                  <div key={c.key} style={{ width: c.width, fontSize: 12, color: '#8c8c8c', fontWeight: 600, textAlign: c.kind === 'measure' || c.kind === 'amount' ? 'right' : 'left', flex: 'none' }}>
                     {c.label}
                   </div>
                 ))}

@@ -306,19 +306,19 @@ export default function ProformaDetailPage() {
                   {showImages && <td>{l.image ? <img src={l.image.url} alt="" className="doc-thumb" /> : null}</td>}
                   <td>
                     <div>{l.description}</div>
-                    {l.product && <div style={{ color: '#999', fontSize: 11 }}>{l.product.factoryCode}</div>}
-                    {l.specs && <div style={{ color: '#999', fontSize: 11 }}>{l.specs}</div>}
+                    {l.product && <div style={{ color: '#999', fontSize: 12 }}>{l.product.factoryCode}</div>}
+                    {l.specs && <div style={{ color: '#999', fontSize: 12 }}>{l.specs}</div>}
                     {/* A discount is stated on its own line, or the amount looks wrong. */}
                     {((l.discountPct ?? 0) > 0 || (l.discountAmt ?? 0) > 0) && (
-                      <div style={{ color: '#c62828', fontSize: 11 }}>
+                      <div style={{ color: '#c62828', fontSize: 12 }}>
                         {[(l.discountPct ?? 0) > 0 ? `${l.discountPct}% off` : '', (l.discountAmt ?? 0) > 0 ? `less ${money(l.discountAmt!, symbol)}` : ''].filter(Boolean).join(', ')}
                       </div>
                     )}
                   </td>
-                  {p.totals?.taxed && <td style={{ fontSize: 11, color: '#666' }}>{l.hsnCode ?? '—'}</td>}
+                  {p.totals?.taxed && <td style={{ fontSize: 12, color: '#666' }}>{l.hsnCode ?? '—'}</td>}
                   <td style={{ textAlign: 'right' }}>{l.qty}</td>
                   <td style={{ textAlign: 'right' }}>{money(l.unitPrice, symbol)}</td>
-                  {p.totals?.taxed && <td style={{ textAlign: 'right', fontSize: 11 }}>{l.gstRatePct ?? 0}%</td>}
+                  {p.totals?.taxed && <td style={{ textAlign: 'right', fontSize: 12 }}>{l.gstRatePct ?? 0}%</td>}
                   <td style={{ textAlign: 'right' }}>{money(l.amount ?? l.qty * l.unitPrice, symbol)}</td>
                 </tr>
               ))}

@@ -22,6 +22,8 @@ import { loadMethodMap } from '../src/lib/methods';
 import { seedManforceDefaults } from './manforceSeed';
 import { documentValueOf } from '../src/lib/pricing';
 import { ensureCompany } from '../src/lib/company';
+import { buildBoard } from '../src/lib/production';
+import { syncOrderStatus } from '../src/lib/orderBoard';
 import { wipeOperational as wipe } from './wipe';
 
 const prisma = new PrismaClient();
@@ -1245,14 +1247,26 @@ async function main() {
   // clearances they are named on.
   await seedWorkforce(admin.id);
 
+  // --- the sales side: packed cartons, containers, dispatch, invoices -------
+  //
+  // Chosen so each rule is visible in the demo rather than only in the self-checks:
+  // an order shipped in TWO PARTS (so the derived status is seen to stay Ready and then
+  // flip to Shipped), a shipment drawing on TWO ORDERS, a domestic tax invoice with an
+  // e-way bill, and free-pool stock that belongs to no order at all.
+  const { shipments: shipCount, invoices: invCount, shpNo, invNo, dinvNo } = await seedSales(admin.id);
+
   // Document counters continue from what the demo used.
   await prisma.docSequence.update({ where: { key: 'PI' }, data: { lastNo: piNo } });
   await prisma.docSequence.update({ where: { key: 'ORD' }, data: { lastNo: ordNo } });
   await prisma.docSequence.update({ where: { key: 'DPI' }, data: { lastNo: dpiNo } });
   await prisma.docSequence.update({ where: { key: 'DORD' }, data: { lastNo: dordNo } });
   await prisma.docSequence.update({ where: { key: 'OP' }, data: { lastNo: opNo } });
+  await prisma.docSequence.update({ where: { key: 'SHP' }, data: { lastNo: shpNo } });
+  await prisma.docSequence.update({ where: { key: 'INV' }, data: { lastNo: invNo } });
+  await prisma.docSequence.update({ where: { key: 'DINV' }, data: { lastNo: dinvNo } });
 
   console.log(`  ${photoCount} hand-over photos, ${opNo} material sheets`);
+  console.log(`  ${shipCount} shipments, ${invCount} invoices`);
   console.log('\nOrder values:');
   console.log(`  ${dord1.number}  INR ${d1.toLocaleString('en-IN')}  (domestic, CGST+SGST)`);
   console.log(`  ${dord2.number}  INR ${d2.toLocaleString('en-IN')}  (domestic, IGST)`);
@@ -1265,6 +1279,314 @@ async function main() {
     console.log(`  ${n}  ${c} ${v.toLocaleString('en-IN')}`);
   }
   console.log('\nDemo ready.  admin@saraswati.local / admin123');
+}
+
+/**
+ * Finished stock, packing, dispatch and invoicing.
+ *
+ * Everything here is written as the routes would write it: cartons come from
+ * `piecesPerCarton`, the packing batch SNAPSHOTS the product's dims and weights, and no
+ * total is stored on an invoice — its money is derived by `documentTotalsOf()` on read.
+ *
+ * The order statuses are left to `syncOrderStatus`, which is what proves the derived rule
+ * rather than asserting it: the part-shipped order really does read Ready.
+ */
+async function seedSales(userId: number) {
+  const day = (back: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - back);
+    d.setHours(9, 0, 0, 0);
+    return d;
+  };
+
+  /** Every finished, unpacked line of an order, ready to box. */
+  const linesOf = async (orderNumber: string) => {
+    const order = await prisma.order.findFirst({
+      where: { number: orderNumber },
+      include: { lines: { include: { stages: true, moves: true, product: true } }, buyer: true, currency: true },
+    });
+    if (!order) return null;
+    return order;
+  };
+
+  const packLine = async (
+    line: { id: number; productId: number; product: { piecesPerCarton: number | null; packLengthIn: number | null; packWidthIn: number | null; packHeightIn: number | null; netWeightKg: number | null; grossWeightKg: number | null; volumeAfterPackingCbm: number | null } },
+    qty: number,
+    marks: string,
+    packedOn: Date
+  ) => {
+    const per = line.product.piecesPerCarton && line.product.piecesPerCarton > 0 ? line.product.piecesPerCarton : 1;
+    const cartons = Math.ceil(qty / per);
+    return prisma.packingBatch.create({
+      data: {
+        productId: line.productId,
+        orderLineId: line.id,
+        qty,
+        cartonCount: cartons,
+        // Snapshotted, so correcting the product master later cannot change a packing list
+        // that has already been printed.
+        piecesPerCarton: per,
+        packLengthIn: line.product.packLengthIn,
+        packWidthIn: line.product.packWidthIn,
+        packHeightIn: line.product.packHeightIn,
+        netWeightKg: line.product.netWeightKg,
+        grossWeightKg: line.product.grossWeightKg,
+        cbmPerPiece: line.product.volumeAfterPackingCbm,
+        shippingMarks: marks,
+        packedOn,
+        createdById: userId,
+      },
+    });
+  };
+
+  let shpNo = 0;
+  let invNo = 0;
+  let dinvNo = 0;
+  let shipments = 0;
+  let invoices = 0;
+
+  const twenty = await prisma.containerType.findUnique({ where: { code: '20FT' } });
+  const fortyHQ = await prisma.containerType.findUnique({ where: { code: '40HQ' } });
+
+  // --- 1. an export order shipped in TWO PARTS ------------------------------
+  const ord1 = await linesOf('ORD-2026-0001');
+  if (ord1 && fortyHQ) {
+    const ready = ord1.lines.filter((l) => buildBoard(l.qty, l.stages as never, l.moves as never).done > 0);
+    if (ready.length >= 2) {
+      const [a, b] = ready;
+      const boardA = buildBoard(a.qty, a.stages as never, a.moves as never);
+      // First half: part of line A only, so the order is visibly NOT fully shipped.
+      const half = Math.max(1, Math.floor(boardA.done / 2));
+      const batchA1 = await packLine(a, half, `SE/${ord1.number}/1-UP`, day(24));
+      shpNo += 1;
+      const ship1 = await prisma.shipment.create({
+        data: {
+          number: `SHP-${String(shpNo).padStart(4, '0')}`,
+          status: 'SHIPPED',
+          shipDate: day(21),
+          shippingBillNo: `SB/${7100 + shpNo}/26`,
+          portOfLoading: 'Mundra',
+          portOfDischarge: 'Felixstowe',
+          finalDestination: 'London, UK',
+          vesselOrFlight: 'MV Ganges Star / 214W',
+          blAwbNo: `MSCU${480000 + shpNo}`,
+          createdById: userId,
+        },
+      });
+      const c1 = await prisma.shipmentContainer.create({
+        data: { shipmentId: ship1.id, containerTypeId: fortyHQ.id, containerNo: `MSCU${1230000 + shpNo}`, sealNo: `SL${9900 + shpNo}`, tareWeightKg: 3900 },
+      });
+      await prisma.shipmentLine.create({ data: { shipmentId: ship1.id, packingBatchId: batchA1.id, containerId: c1.id, cartons: batchA1.cartonCount, qty: batchA1.qty } });
+      shipments += 1;
+
+      // The rest of line A — a SECOND part shipment. Line B is deliberately left behind, so
+      // the order is visibly still `Ready` after both of these: 40 of its 70 pieces have
+      // gone. That is the derived-status rule on show rather than asserted.
+      const batchA2 = await packLine(a, boardA.done - half, `SE/${ord1.number}/2-UP`, day(12));
+      shpNo += 1;
+      const ship2 = await prisma.shipment.create({
+        data: {
+          number: `SHP-${String(shpNo).padStart(4, '0')}`,
+          status: 'SHIPPED',
+          shipDate: day(9),
+          shippingBillNo: `SB/${7100 + shpNo}/26`,
+          portOfLoading: 'Mundra',
+          portOfDischarge: 'Felixstowe',
+          finalDestination: 'London, UK',
+          vesselOrFlight: 'MV Thar Breeze / 118W',
+          blAwbNo: `MSCU${480000 + shpNo}`,
+          createdById: userId,
+        },
+      });
+      const c2 = await prisma.shipmentContainer.create({
+        data: { shipmentId: ship2.id, containerTypeId: fortyHQ.id, containerNo: `MSCU${1230000 + shpNo}`, sealNo: `SL${9900 + shpNo}`, tareWeightKg: 3900 },
+      });
+      await prisma.shipmentLine.create({ data: { shipmentId: ship2.id, packingBatchId: batchA2.id, containerId: c2.id, cartons: batchA2.cartonCount, qty: batchA2.qty } });
+      shipments += 1;
+
+      // A commercial invoice for the second dispatch, with CIF charges and a part receipt.
+      invNo += 1;
+      const inv = await prisma.invoice.create({
+        data: {
+          number: `INV-2026-${String(invNo).padStart(4, '0')}`,
+          status: 'ISSUED',
+          buyerId: ord1.buyerId,
+          currencyId: ord1.currencyId,
+          exchangeRate: ord1.exchangeRate,
+          invoiceDate: day(8),
+          shipmentId: ship2.id,
+          incoterms: 'CIF',
+          taxMarket: 'OVERSEAS',
+          taxBuyerState: ord1.buyer.state,
+          taxCompanyState: 'Rajasthan',
+          paymentTerms: '30 days from BL date',
+          bankDetails: 'HDFC Bank, Jodhpur · A/c 50200012345678 · SWIFT HDFCINBB',
+          createdById: userId,
+        },
+      });
+      let sort = 0;
+      for (const [bt, ol] of [[batchA2, a]] as const) {
+        await prisma.invoiceLine.create({
+          data: {
+            invoiceId: inv.id,
+            productId: ol.productId,
+            // Named so a receipt against this invoice can be attributed back to the order.
+            orderLineId: ol.id,
+            qty: bt.qty,
+            // COPIES of the order's price inputs — the document is frozen against a later
+            // correction, yet no figure on it can contradict the pricing engine.
+            unitPrice: ol.unitPrice,
+            discountPct: ol.discountPct,
+            discountAmt: ol.discountAmt,
+            gstRatePct: 0,
+            hsnCode: ol.hsnCode,
+            sortOrder: sort++,
+          },
+        });
+      }
+      // Freight and insurance are what turn FOB into CIF, and they belong to the document.
+      await prisma.invoiceCharge.create({ data: { invoiceId: inv.id, name: 'Ocean freight', kind: 'CHARGE', amount: 520, gstRatePct: 0, sortOrder: 0 } });
+      await prisma.invoiceCharge.create({ data: { invoiceId: inv.id, name: 'Marine insurance', kind: 'CHARGE', pct: 1.1, gstRatePct: 0, sortOrder: 1 } });
+      invoices += 1;
+
+      await syncSalesStatus(ord1.id);
+    }
+  }
+
+  // --- 2. one shipment drawing on TWO ORDERS of the SAME buyer -------------
+  //
+  // ORD-2026-0004 belongs to the same buyer as ORD-2026-0001, so the two really can be
+  // co-loaded. Its board is still mid-production, so the pieces come from an OPENING
+  // adjustment — which is exactly what that reason is for: stock that was finished before
+  // the system started keeping the board.
+  const ord4 = await linesOf('ORD-2026-0004');
+  if (ord1 && ord4 && twenty && ord4.buyerId === ord1.buyerId) {
+    const l4 = ord4.lines[0];
+    const opening = Math.min(12, l4.qty);
+    await prisma.finishedTxn.create({
+      data: { productId: l4.productId, kind: 'ADJUST_IN', qty: opening, orderLineId: l4.id, reason: 'OPENING', note: 'Finished before go-live', date: day(20), createdById: userId },
+    });
+    const bt4 = await packLine(l4, opening, `SE/${ord4.number}/CO`, day(4));
+
+    // …and the line the first order still had outstanding goes in the SAME box. That is what
+    // makes this a consolidated container rather than two shipments — and shipping it is what
+    // finally takes ORD-2026-0001 to `Shipped`.
+    const l1 = ord1.lines[1] ?? ord1.lines[0];
+    const board1 = buildBoard(l1.qty, l1.stages as never, l1.moves as never);
+    const bt1 = await packLine(l1, board1.done, `SE/${ord1.number}/CO`, day(4));
+
+    shpNo += 1;
+    const ship = await prisma.shipment.create({
+      data: {
+        number: `SHP-${String(shpNo).padStart(4, '0')}`,
+        status: 'LOADED',
+        shipDate: null,
+        portOfLoading: 'Mundra',
+        portOfDischarge: 'Felixstowe',
+        createdById: userId,
+        notes: 'Two orders for one buyer, consolidated into a single box.',
+      },
+    });
+    const c = await prisma.shipmentContainer.create({ data: { shipmentId: ship.id, containerTypeId: twenty.id, tareWeightKg: 2200 } });
+    for (const bt of [bt4, bt1]) {
+      await prisma.shipmentLine.create({ data: { shipmentId: ship.id, packingBatchId: bt.id, containerId: c.id, cartons: bt.cartonCount, qty: bt.qty } });
+    }
+    shipments += 1;
+    for (const o of [ord1, ord4]) await syncSalesStatus(o.id);
+  }
+
+  // --- 3. a domestic dispatch with a GST tax invoice and an e-way bill ------
+  const dord = await linesOf('DORD-2026-0001');
+  if (dord && twenty) {
+    const l = dord.lines[0];
+    if (l) {
+      // Same reason as above: this order is mid-production, so its shippable pieces are an
+      // opening balance rather than board completions.
+      const opening = Math.min(8, l.qty);
+      await prisma.finishedTxn.create({
+        data: { productId: l.productId, kind: 'ADJUST_IN', qty: opening, orderLineId: l.id, reason: 'OPENING', note: 'Finished before go-live', date: day(14), createdById: userId },
+      });
+      const bt = await packLine(l, opening, `SE/${dord.number}`, day(6));
+      shpNo += 1;
+      const ship = await prisma.shipment.create({
+        data: {
+          number: `SHP-${String(shpNo).padStart(4, '0')}`,
+          status: 'DELIVERED',
+          shipDate: day(5),
+          // Domestic movement paperwork — all optional, and typed in.
+          transporterName: 'Rajdhani Roadways',
+          transporterGstin: '08AAACR1234M1ZP',
+          vehicleNo: 'RJ 19 GA 4471',
+          ewayBillNo: '381004512789',
+          ewayBillDate: day(5),
+          createdById: userId,
+        },
+      });
+      const c = await prisma.shipmentContainer.create({ data: { shipmentId: ship.id, containerTypeId: twenty.id, tareWeightKg: 2200 } });
+      await prisma.shipmentLine.create({ data: { shipmentId: ship.id, packingBatchId: bt.id, containerId: c.id, cartons: bt.cartonCount, qty: bt.qty } });
+      shipments += 1;
+
+      dinvNo += 1;
+      const inv = await prisma.invoice.create({
+        data: {
+          number: `DINV-2026-${String(dinvNo).padStart(4, '0')}`,
+          status: 'ISSUED',
+          buyerId: dord.buyerId,
+          currencyId: dord.currencyId,
+          exchangeRate: dord.exchangeRate ?? 1,
+          invoiceDate: day(5),
+          shipmentId: ship.id,
+          taxMarket: 'DOMESTIC',
+          taxBuyerState: dord.buyer.state,
+          taxCompanyState: 'Rajasthan',
+          placeOfSupply: dord.buyer.state,
+          paymentTerms: '15 days',
+          createdById: userId,
+        },
+      });
+      await prisma.invoiceLine.create({
+        data: {
+          invoiceId: inv.id,
+          productId: l.productId,
+          orderLineId: l.id,
+          qty: bt.qty,
+          unitPrice: l.unitPrice,
+          discountPct: l.discountPct,
+          discountAmt: l.discountAmt,
+          // A domestic line is taxed; the rate is copied like every other price input.
+          gstRatePct: l.gstRatePct || 18,
+          hsnCode: l.hsnCode,
+          sortOrder: 0,
+        },
+      });
+      invoices += 1;
+      await syncSalesStatus(dord.id);
+    }
+  }
+
+  // --- 4. free-pool stock: belongs to no order, any order may draw on it ----
+  const spare = await prisma.product.findFirst({ where: { deletedAt: null }, orderBy: { id: 'asc' } });
+  if (spare) {
+    for (const t of [
+      { kind: 'ADJUST_IN', qty: 12, reason: 'OPENING', note: 'Opening balance at go-live', date: day(60) },
+      { kind: 'ADJUST_OUT', qty: 2, reason: 'DAMAGE', note: 'Water damage in the godown', date: day(30) },
+      { kind: 'RETURN_IN', qty: 1, reason: 'RETURN', note: 'Buyer returned one piece, polish defect', date: day(7) },
+    ] as const) {
+      await prisma.finishedTxn.create({ data: { productId: spare.id, kind: t.kind, qty: t.qty, orderLineId: null, reason: t.reason, note: t.note, date: t.date, createdById: userId } });
+    }
+  }
+
+  return { shipments, invoices, shpNo, invNo, dinvNo };
+}
+
+/** Let the engine decide the order's status, exactly as a route would. */
+async function syncSalesStatus(orderId: number) {
+  const rows = await prisma.shipmentLine.findMany({
+    where: { shipment: { deletedAt: null, status: { not: 'CANCELLED' } }, packingBatch: { orderLine: { orderId } } },
+    select: { qty: true },
+  });
+  const shipped = rows.reduce((a, r) => a + r.qty, 0);
+  await syncOrderStatus(prisma, orderId, shipped);
 }
 
 main()

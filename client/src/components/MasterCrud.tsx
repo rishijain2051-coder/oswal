@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, App } from 'antd';
+import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, App } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnsType } from 'antd/es/table';
@@ -103,9 +103,13 @@ export default function MasterCrud({
       width: 110,
       render: (_, row) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+          <Tooltip title="Edit this entry">
+            <Button size="small" aria-label="Edit this entry" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+          </Tooltip>
           <Popconfirm title="Delete this entry?" onConfirm={() => del.mutate(row.id)} okButtonProps={{ danger: true }}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="Delete this entry">
+              <Button size="small" danger aria-label="Delete this entry" icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),

@@ -112,7 +112,7 @@ export default function ForexSummaryCard({ compact }: { compact?: boolean }) {
                   <Tag color={v === 'INR' ? 'default' : 'blue'} style={{ marginInlineEnd: 0 }}>
                     {v}
                   </Tag>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
                     {r.orderCount} order{r.orderCount === 1 ? '' : 's'}
                   </Text>
                 </Space>
@@ -147,7 +147,7 @@ export default function ForexSummaryCard({ compact }: { compact?: boolean }) {
           ]}
         />
 
-        <Text type="secondary" style={{ fontSize: 11 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
           Each order is converted at the rate snapshotted when it was created. The movement is unrealised — it becomes real only when the money is received. Update rates in Master Data →
           Currencies.
         </Text>

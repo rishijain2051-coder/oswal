@@ -116,7 +116,7 @@ export default function StatutoryPage() {
       <Row gutter={[16, 16]} style={{ margin: '16px 0' }}>
         {statutoryPayables.map((s) => (
           <Col xs={12} md={6} key={s.partyId}>
-            <Card size="small" hoverable onClick={() => navigate(`/operations/payments/statutory/${s.partyId}`)}>
+            <Card size="small" hoverable onClick={() => navigate(`/finance/payments/statutory/${s.partyId}`)}>
               <Statistic
                 title={`${s.code} ${s.isProvision ? 'provision' : 'owed'} (₹)`}
                 value={num(s.isProvision ? s.accrued - s.paid : s.balance, 0)}
@@ -140,7 +140,15 @@ export default function StatutoryPage() {
         title="What this period would create"
         extra={
           <Space wrap>
-            <DatePicker.RangePicker value={range} onChange={(v) => v && setRange(v as [Dayjs, Dayjs])} format="DD MMM YYYY" allowClear={false} />
+            {/* A range picker renders TWO inputs, so it takes an id per end. */}
+            <DatePicker.RangePicker
+              id={{ start: 'statutory-from', end: 'statutory-to' }}
+              name="statutory-period"
+              value={range}
+              onChange={(v) => v && setRange(v as [Dayjs, Dayjs])}
+              format="DD MMM YYYY"
+              allowClear={false}
+            />
             <Button size="small" onClick={() => setRange([dayjs().startOf('month'), dayjs().endOf('month')])}>
               this month
             </Button>
@@ -170,7 +178,12 @@ export default function StatutoryPage() {
           rowSelection={{
             selectedRowKeys: includedRows.map((r) => r.workerId),
             onChange: (keys) => setExcluded(new Set(rows.filter((r) => !keys.includes(r.workerId)).map((r) => r.workerId))),
-            getCheckboxProps: (r) => ({ disabled: Object.values(r.cells).every((c) => c.alreadyPosted || !c.covered) }),
+            // `name` so each selection box is an identifiable form field rather than an
+            // anonymous one — antd passes these straight through to the checkbox.
+            getCheckboxProps: (r) => ({
+              name: `statutory-include-${r.workerId}`,
+              disabled: Object.values(r.cells).every((c) => c.alreadyPosted || !c.covered),
+            }),
           }}
           columns={[
             {

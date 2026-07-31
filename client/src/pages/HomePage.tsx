@@ -4,17 +4,26 @@ import {
   AppstoreOutlined,
   ToolOutlined,
   ShoppingOutlined,
+  FileDoneOutlined,
+  WalletOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 
 const { Title, Text } = Typography;
 
+/**
+ * Orders comes first and stands alone, because the order is the record everything else hangs
+ * off: open one and you reach its proforma, products, material sheets, cartons, containers,
+ * invoices and money without going back to a list.
+ */
 const MODULES = [
-  { key: 'manforce', title: 'Manforce Management', icon: <TeamOutlined />, path: '/manforce', ready: true, desc: 'Workers, muster roll, wages, advances & statutory dues.' },
-  { key: 'product', title: 'Product Management', icon: <AppstoreOutlined />, path: '/products', ready: true, desc: 'Catalogue, product details & costing sheets.' },
-  { key: 'operations', title: 'Operations Management', icon: <ToolOutlined />, path: '/operations', ready: true, desc: 'Orders, proformas, suppliers, stock, operation sheets, jobs & payments.' },
-  { key: 'sales', title: 'Finished Product & Sales', icon: <ShoppingOutlined />, path: '/sales', ready: false, desc: 'Finished goods, dispatch, containers & sales.' },
+  { key: 'orders', title: 'Orders', icon: <FileDoneOutlined />, path: '/operations/orders', ready: true, desc: 'The hub — the production board, and everything an order later became.' },
+  { key: 'operations', title: 'Operations', icon: <ToolOutlined />, path: '/operations', ready: true, desc: 'Proformas, delivery, material sheets, suppliers & raw stock.' },
+  { key: 'sales', title: 'Dispatch', icon: <ShoppingOutlined />, path: '/sales', ready: true, desc: 'Finished stock, packing, containers & shipments.' },
+  { key: 'finance', title: 'Finance', icon: <WalletOutlined />, path: '/finance', ready: true, desc: 'Receivables, payables, receipts, payments & invoices.' },
+  { key: 'manforce', title: 'Manforce', icon: <TeamOutlined />, path: '/manforce', ready: true, desc: 'Workers, muster roll, wages, advances & statutory dues.' },
+  { key: 'product', title: 'Products', icon: <AppstoreOutlined />, path: '/products', ready: true, desc: 'Catalogue, product details & costing sheets.' },
 ];
 
 export default function HomePage() {

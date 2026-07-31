@@ -16,8 +16,25 @@ import path from 'node:path';
 import { BUILTIN_METHODS, round, suggestCostDim, type MethodMap } from '../src/lib/costing';
 import { computeCostSheet } from '../src/lib/productCosting';
 import { rowToMethodDef } from '../src/lib/methods';
-import { buildBoard, expandHops, validateMove, type MoveRow, type StageRow } from '../src/lib/production';
+import { buildBoard, expandHops, impliedOrderStatus, validateMove, type MoveRow, type StageRow } from '../src/lib/production';
 import { allocateFifo, buildFinanceContext, buildStatement, jobworkEvents, receivablesByCurrency, type Bucket } from '../src/lib/finance';
+import {
+  CBM_MISMATCH_PCT,
+  CBM_PER_CUBIC_INCH,
+  cartonBoxCbm,
+  cartonCbm,
+  cartonsFor,
+  containerFit,
+  guardCartonFit,
+  guardInvoiceQty,
+  guardPackQty,
+  guardShipQty,
+  packedTotals,
+  planContainers,
+  round4,
+  vgm,
+} from '../src/lib/shipping';
+import { finishedOnHand } from '../src/lib/finished';
 import {
   DEFAULT_RULES,
   accrualStart,
@@ -589,9 +606,9 @@ check('nothing is flagged on a plain document', intra.mismatchedChargeRates, [])
 console.log('\n--- what the rest of the app reads ---');
 check('documentValue is the grand total', documentValue([{ qty: 2, unitPrice: 500, gstRatePct: 18 }], [], { market: 'DOMESTIC', buyerState: 'R', companyState: 'R' }), 1180);
 check('an empty document is worth nothing, not NaN', documentValue([], [], { market: 'DOMESTIC', buyerState: 'R', companyState: 'R' }), 0);
-check('overseas keeps the numbering it always had', docKeys('OVERSEAS'), { proforma: 'PI', order: 'ORD' });
-check('domestic gets its own series', docKeys('DOMESTIC'), { proforma: 'DPI', order: 'DORD' });
-check('an unset market is treated as overseas', docKeys(null), { proforma: 'PI', order: 'ORD' });
+check('overseas keeps the numbering it always had', docKeys('OVERSEAS'), { proforma: 'PI', order: 'ORD', invoice: 'INV' });
+check('domestic gets its own series', docKeys('DOMESTIC'), { proforma: 'DPI', order: 'DORD', invoice: 'DINV' });
+check('an unset market is treated as overseas', docKeys(null), { proforma: 'PI', order: 'ORD', invoice: 'INV' });
 
 console.log('\n--- the state comparison behind the split ---');
 check('spacing and case do not make a new state', sameState('  rajasthan ', 'Rajasthan'), true);
@@ -646,6 +663,339 @@ console.log('\n--- soft delete stays out of the pure functions ---');
     noJobwork
   );
   check('the engine does NOT special-case a deleted order — the query must exclude it', deleted.received.get(3), 400);
+}
+
+// ---------------------------------------------------------------------------
+// Cartons, space, weight — and what may still go out
+// ---------------------------------------------------------------------------
+
+console.log('\n--- cartons and volume ---');
+{
+  check('24 pcs at 4 per carton is 6 full boxes', cartonsFor(24, 4), { full: 6, lastPieces: 0, total: 6 });
+  // A part carton is still a carton — six full boxes plus one holding a single piece.
+  check('25 pcs at 4 leaves a short last box', cartonsFor(25, 4), { full: 6, lastPieces: 1, total: 7 });
+  check('a missing pieces-per-carton means loose pieces, never a divide by zero', cartonsFor(5, null), { full: 5, lastPieces: 0, total: 5 });
+  check('zero is handled the same way', cartonsFor(5, 0), { full: 5, lastPieces: 0, total: 5 });
+  check('nothing to pack is no cartons', cartonsFor(0, 4), { full: 0, lastPieces: 0, total: 0 });
+
+  // A product as the wizard builds one: volumeAfterPackingCbm is PER PIECE.
+  const dims = { packLengthIn: 24, packWidthIn: 18, packHeightIn: 12, piecesPerCarton: 4 };
+  const boxCbm = round4(24 * 18 * 12 * CBM_PER_CUBIC_INCH);
+  const perPiece = round4(boxCbm / 4);
+  check('the box volume comes off the dimensions', cartonBoxCbm(dims), boxCbm);
+  /**
+   * THE property that catches a future refactor of the wizard: the stored per-piece figure
+   * times the pieces per carton is the whole box. Get the direction wrong and every load
+   * under-reports by a factor of `piecesPerCarton`.
+   *
+   * It reconciles to within 4-dp ROUNDING, not exactly, and that is by construction: the
+   * wizard stores a rounded per-piece figure, so multiplying it back can be out by up to
+   * half a unit in the last place per piece. That is precisely the drift `CBM_MISMATCH_PCT`
+   * is set at 1% to absorb — an exact-equality check here would be asserting something the
+   * data cannot deliver.
+   */
+  check('per-piece × pieces-per-carton is the whole box, to within rounding', Math.abs(perPiece * 4 - boxCbm) <= 4 * 0.00005, true);
+  check('and it is the right order of magnitude — not out by piecesPerCarton', Math.abs(perPiece * 4 - boxCbm) < boxCbm / 2, true);
+
+  const stored = cartonCbm({ ...dims, cbmPerPiece: perPiece });
+  check('a stored per-piece figure is scaled to the carton', stored.value, round4(perPiece * 4));
+  check('and is reported as coming from the product', stored.source, 'STORED');
+  // The rounding drift is real but far below the threshold worth telling a packer about.
+  check('the rounding drift is not flagged as a disagreement', stored.mismatchPct <= CBM_MISMATCH_PCT, true);
+
+  // Clearing cbmPerPiece is how a caller hands authority to the dimensions.
+  const derived = cartonCbm({ ...dims, cbmPerPiece: null });
+  check('clearing the stored figure hands over to the dimensions', [derived.value, derived.source], [boxCbm, 'DERIVED']);
+
+  // A measurement outranks arithmetic.
+  const override = cartonCbm({ ...dims, cbmPerPiece: perPiece, cbmPerCartonOverride: 0.9 });
+  check('a measured box wins outright', [override.value, override.source], [0.9, 'OVERRIDE']);
+
+  // A disagreement is REPORTED, never resolved silently.
+  const off = cartonCbm({ ...dims, cbmPerPiece: round4(perPiece * 1.03) });
+  check('a 3% disagreement is flagged', off.mismatchPct > CBM_MISMATCH_PCT, true);
+  const rounding = cartonCbm({ ...dims, cbmPerPiece: round4(perPiece * 1.002) });
+  check('a rounding difference is not', rounding.mismatchPct <= CBM_MISMATCH_PCT, true);
+
+  // A part carton is a whole box for volume, pro-rata for weight.
+  const batch = { ...dims, cbmPerPiece: perPiece, netWeightKg: 10, grossWeightKg: 12, qty: 25, cartonCount: 7 };
+  const oneBox = round4(perPiece * 4);
+  const full = packedTotals([batch]);
+  check('seven boxes take seven boxes of room', full.cbm, round4(oneBox * 7));
+  check('but only 25 pieces of weight', [full.netKg, full.grossKg], [250, 300]);
+  const part = packedTotals([{ ...batch, cartonsTaken: 1, piecesTaken: 1 }]);
+  check('a single short carton still occupies a full box', part.cbm, oneBox);
+  check('and weighs only what is in it', part.grossKg, 12);
+}
+
+console.log('\n--- containers ---');
+{
+  const twenty = { capacityCbm: 33, payloadKg: 21000 };
+  const load = { cartons: 10, pieces: 40, cbm: 30, netKg: 17000, grossKg: 18000 };
+  const fit = containerFit(load, twenty);
+  check('a load that fits reports so', [fit.fits, fit.overCbm, fit.overKg], [true, false, false]);
+  check('and how full it is', [fit.cbmPct, fit.kgPct], [90.91, 85.71]);
+
+  check('over on volume alone does not fit', containerFit({ ...load, cbm: 34 }, twenty).fits, false);
+  check('over on payload alone does not fit', containerFit({ ...load, grossKg: 22000 }, twenty).fits, false);
+  // The limit is on what crosses a weighbridge, so the empty box counts against it.
+  check('tare weight counts against the payload', containerFit({ ...load, grossKg: 20000 }, twenty, 2200).overKg, true);
+  check('and is included in the figure declared', containerFit({ ...load, grossKg: 20000 }, twenty, 2200).usedKg, 22200);
+
+  // A capacity of 0 means "not a container" — an LCL part load has no limit to exceed.
+  const lcl = containerFit({ ...load, cbm: 999, grossKg: 99999 }, { capacityCbm: 0, payloadKg: 0 });
+  check('a part load can never be over capacity', [lcl.fits, lcl.cbmPct, lcl.kgPct], [true, 0, 0]);
+
+  check('VGM is the tare plus what went in', vgm(2200, 18000), 20200);
+  check('and treats a missing tare as nothing', vgm(null, 18000), 18000);
+
+  const types = [
+    { id: 1, code: '20FT', capacityCbm: 33, payloadKg: 21000 },
+    { id: 3, code: '40HQ', capacityCbm: 76, payloadKg: 26500 },
+  ];
+  const cartons = Array.from({ length: 100 }, () => ({ cbm: 1, grossKg: 100 }));
+  const plan = planContainers(cartons, types);
+  check('a 100 CBM load needs two of the biggest box', plan.length, 2);
+  check('and every proposed box fits', plan.every((p) => p.fit.fits), true);
+  check('nothing to load needs no container', planContainers([], types).length, 0);
+  // A box with no stated capacity would swallow everything and report a perfect fit.
+  check('a part-load type is never proposed', planContainers(cartons, [{ id: 4, code: 'LCL', capacityCbm: 0, payloadKg: 0 }]).length, 0);
+}
+
+console.log('\n--- what may still go out ---');
+{
+  check('nothing packed means nothing to ship', guardShipQty(0, 1), 'Nothing is packed and ready for this line yet.');
+  check('more than is packed is refused, and says how many', guardShipQty(4, 5), 'Only 4 pc(s) are packed and unshipped on this line.');
+  check('exactly what is packed is allowed', guardShipQty(4, 4), null);
+  check('pieces ship whole', guardShipQty(4, 1.5), 'Pieces ship whole.');
+  check('nothing finished means nothing to pack', guardPackQty(0, 1), 'Nothing is finished and unpacked on this line yet.');
+  check('a legal pack passes', guardPackQty(10, 10), null);
+
+  // An order shipped in parts: 40 then 60 of 100 both pass, and a further 1 does not.
+  check('the first part shipment is allowed', guardShipQty(100, 40), null);
+  check('and so is the rest', guardShipQty(60, 60), null);
+  check('but not one more', guardShipQty(0, 1), 'Nothing is packed and ready for this line yet.');
+
+  check('nothing shipped cannot be billed', guardInvoiceQty(0, 0, 1), 'This line has not shipped yet, so there is nothing to bill.');
+  check('billing what shipped is allowed', guardInvoiceQty(10, 0, 10), null);
+  check('billing it twice is refused', guardInvoiceQty(10, 10, 1), 'All 10 shipped pc(s) on this line are already invoiced.');
+  check('and a part-billed line says what is left', guardInvoiceQty(10, 6, 5), 'Only 4 of the 10 shipped pc(s) are still to be invoiced.');
+  check('a carton cannot hold more than it holds', guardCartonFit(2, 4, 9), '2 carton(s) of 4 hold at most 8 pc — not 9.');
+  check('and a legal fit passes', guardCartonFit(2, 4, 8), null);
+}
+
+console.log('\n--- finished stock is derived, never stored ---');
+{
+  const base = { boardDone: [], txns: [], boughtIn: [], packed: [], shipped: [] };
+  const line = { orderLineId: 7, productId: 3, done: 40, ordered: 40 };
+
+  const board = finishedOnHand({ ...base, boardDone: [line] });
+  check('the board alone puts pieces on the floor', board.byOrderLine.get(7)!.onHand, 40);
+  check('all of it is packable', board.byOrderLine.get(7)!.availableToPack, 40);
+  // availableToShip counts PACKED and unshipped — shipping what was never packed is
+  // exactly what the pack step exists to prevent.
+  check('but none of it is shippable until it is boxed', board.byOrderLine.get(7)!.availableToShip, 0);
+
+  const packed = finishedOnHand({ ...base, boardDone: [line], packed: [{ productId: 3, orderLineId: 7, qty: 24 }] });
+  const cell = packed.byOrderLine.get(7)!;
+  check('packing does not change what is on hand', cell.onHand, 40);
+  check('it moves pieces from packable to shippable', [cell.availableToPack, cell.availableToShip], [16, 24]);
+
+  const shipped = finishedOnHand({
+    ...base,
+    boardDone: [line],
+    packed: [{ productId: 3, orderLineId: 7, qty: 24 }],
+    shipped: [{ productId: 3, orderLineId: 7, qty: 24 }],
+  });
+  check('shipping takes them off the floor', shipped.byOrderLine.get(7)!.onHand, 16);
+  check('and there is nothing boxed left to send', shipped.byOrderLine.get(7)!.availableToShip, 0);
+
+  // THE conservation identity.
+  const mixed = finishedOnHand({
+    boardDone: [line],
+    txns: [
+      { productId: 3, orderLineId: 7, kind: 'ADJUST_OUT', qty: 2 },
+      { productId: 3, orderLineId: null, kind: 'ADJUST_IN', qty: 5 },
+      { productId: 3, orderLineId: null, kind: 'RETURN_IN', qty: 1 },
+    ],
+    boughtIn: [{ productId: 3, qty: 10 }],
+    packed: [],
+    shipped: [{ productId: 3, orderLineId: 7, qty: 3 }],
+  });
+  const p = mixed.byProduct.get(3)!;
+  check('board + adjustments + bought-in + returns − shipped is what is on hand', p.boardDone + p.adjusted + p.boughtIn + p.returned - p.shipped, p.onHand);
+  check('and the order-linked part plus the free pool is the whole', (mixed.byOrderLine.get(7)!.onHand ?? 0) + (mixed.freePool.get(3)!.onHand ?? 0), p.onHand);
+  // Bought-in goods and returns belong to no order, by definition.
+  check('bought-in stock is free pool', mixed.freePool.get(3)!.boughtIn, 10);
+  check('an order-linked adjustment is not', mixed.byOrderLine.get(7)!.adjusted, -2);
+
+  // Undoing a completion un-does the stock, because the board is read live.
+  const undone = finishedOnHand({ ...base, boardDone: [{ ...line, done: 0 }] });
+  check('undoing a completion un-does the stock', undone.byOrderLine.get(7)!.onHand, 0);
+
+  // Over-production is recognisable, and is free for any order to draw on.
+  const over = finishedOnHand({ ...base, boardDone: [{ ...line, done: 45 }] });
+  check('pieces made beyond the order are named as over-production', over.byOrderLine.get(7)!.overProduced, 5);
+
+  // An unknown kind must not silently count as a receipt.
+  const junk = finishedOnHand({ ...base, boardDone: [line], txns: [{ productId: 3, orderLineId: 7, kind: 'NONSENSE', qty: 999 }] });
+  check('an unrecognised movement is ignored, not trusted', junk.byOrderLine.get(7)!.onHand, 40);
+}
+
+console.log('\n--- Shipped is derived from the dispatches ---');
+{
+  const summary = { ordered: 70, done: 70, wip: 0, pending: 0 };
+  // A board-only caller must behave exactly as it always did.
+  check('without a shipped figure the board rule is unchanged', impliedOrderStatus('Production', summary), 'Ready');
+  check('a partly shipped order stays where the board put it', impliedOrderStatus('Ready', summary, 24), null);
+  check('fully shipped becomes Shipped', impliedOrderStatus('Ready', summary, 70), 'Shipped');
+  check('over-shipping still counts as shipped', impliedOrderStatus('Ready', summary, 71), 'Shipped');
+  check('already Shipped needs no change', impliedOrderStatus('Shipped', summary, 70), null);
+  // Un-shipping it (deleting the dispatch) is the only thing that pulls it back.
+  check('un-shipping restates it', impliedOrderStatus('Shipped', summary, 0), 'Ready');
+  // Closed and Cancelled remain human decisions and are never touched.
+  check('Closed is never moved', impliedOrderStatus('Closed', summary, 70), null);
+  check('nor is Cancelled', impliedOrderStatus('Cancelled', summary, 70), null);
+  check('a board-only caller cannot un-ship an order by omission', impliedOrderStatus('Shipped', summary), null);
+}
+
+// ---------------------------------------------------------------------------
+// The receivable basis — ORDER (default) versus INVOICE
+// ---------------------------------------------------------------------------
+//
+// Switching the basis restates every balance on the next read, because allocation is a
+// pure function recomputed on every request. Two things have to hold or the order page and
+// the Payments page start disagreeing:
+//
+//   1. ORDER must behave EXACTLY as it always did — the default cannot move.
+//   2. Under INVOICE, an invoice may span several orders, so the money settled against it
+//      has to split back across them and the parts must sum to the whole EXACTLY.
+console.log('\n--- the receivable basis ---');
+{
+  const buyer = { market: 'OVERSEAS', state: null };
+  const ccy = { code: 'INR', symbol: '₹' };
+  const order = (id: number, qty: number, price: number) => ({
+    id,
+    number: `ORD-${id}`,
+    buyerId: 1,
+    status: 'Confirmed',
+    orderDate: new Date(2026, 0, 10 + id),
+    exchangeRate: 1,
+    currency: ccy,
+    buyer,
+    lines: [{ qty, unitPrice: price }],
+  });
+  const receipt = (id: number, amount: number, extra: Record<string, unknown> = {}) => ({
+    id,
+    partyType: 'BUYER',
+    kind: 'PAYMENT',
+    amount,
+    currency: 'INR',
+    date: new Date(2026, 1, id),
+    buyerId: 1,
+    partyName: 'Buyer',
+    ...extra,
+  });
+  const noJobwork = new Map<number, Map<number, number>>();
+  const orders = [order(1, 10, 100), order(2, 10, 300)] as never; // worth 1000 and 3000
+
+  // --- the default is unchanged --------------------------------------------
+  const byOrder = buildFinanceContext(orders, [receipt(1, 1500)] as never, noJobwork, null);
+  check('the default basis is ORDER', byOrder.basis, 'ORDER');
+  check('ORDER: the oldest order settles first, then the surplus rolls on', [byOrder.received.get(1), byOrder.received.get(2)], [1000, 500]);
+  // The order IS the debt here, so reporting it as "not yet billed" as well would let a page
+  // show the same money twice. The map stays empty rather than being gated by every reader.
+  check('ORDER: order book is empty, because the order IS the debt', byOrder.orderBook.size, 0);
+
+  // --- one invoice covering ONE order --------------------------------------
+  const inv = (id: number, lines: { qty: number; unitPrice: number; orderId: number }[], extra: Record<string, unknown> = {}) => ({
+    id,
+    number: `INV-${id}`,
+    buyerId: 1,
+    status: 'ISSUED',
+    invoiceDate: new Date(2026, 0, 20 + id),
+    exchangeRate: 1,
+    currency: ccy,
+    buyer,
+    lines,
+    ...extra,
+  });
+
+  const single = buildFinanceContext(orders, [receipt(1, 600)] as never, noJobwork, null, {
+    basis: 'INVOICE',
+    invoices: [inv(1, [{ qty: 10, unitPrice: 100, orderId: 1 }])] as never,
+  });
+  check('INVOICE: the basis is carried on the context', single.basis, 'INVOICE');
+  check('INVOICE: the invoice is what got settled', single.invoiceReceived.get(1), 600);
+  check('INVOICE: a single-order invoice attributes straight through', single.received.get(1), 600);
+  check('INVOICE: an uninvoiced order is order book, not a receivable', single.orderBook.get(2), 3000);
+  check('INVOICE: an invoiced order has no order book left', single.orderBook.get(1), 0);
+
+  // --- one invoice spanning TWO orders -------------------------------------
+  // Lines worth 1000 (order 1) and 3000 (order 2); a 2000 receipt is split 25/75.
+  const spanning = buildFinanceContext(orders, [receipt(1, 2000)] as never, noJobwork, null, {
+    basis: 'INVOICE',
+    invoices: [
+      inv(1, [
+        { qty: 10, unitPrice: 100, orderId: 1 },
+        { qty: 10, unitPrice: 300, orderId: 2 },
+      ]),
+    ] as never,
+  });
+  check('INVOICE: a spanning invoice is ONE debt', spanning.invoiceReceived.get(1), 2000);
+  check('INVOICE: the split is weighted by what each order is worth', [spanning.received.get(1), spanning.received.get(2)], [500, 1500]);
+  check(
+    'INVOICE: the attribution sums to exactly what was settled',
+    round((spanning.received.get(1) ?? 0) + (spanning.received.get(2) ?? 0)),
+    spanning.invoiceReceived.get(1)
+  );
+
+  // A third of an odd amount cannot divide cleanly — the remainder must not vanish.
+  const odd = buildFinanceContext(orders, [receipt(1, 1000.01)] as never, noJobwork, null, {
+    basis: 'INVOICE',
+    invoices: [
+      inv(1, [
+        { qty: 1, unitPrice: 1, orderId: 1 },
+        { qty: 1, unitPrice: 1, orderId: 2 },
+        { qty: 1, unitPrice: 1, orderId: 1 },
+      ]),
+    ] as never,
+  });
+  check(
+    'INVOICE: an indivisible split still reconciles to the paisa',
+    round((odd.received.get(1) ?? 0) + (odd.received.get(2) ?? 0)),
+    odd.invoiceReceived.get(1)
+  );
+
+  // --- a cancelled invoice stops being a debt, as a cancelled order does ---
+  const cancelledInv = buildFinanceContext(orders, [receipt(1, 500)] as never, noJobwork, null, {
+    basis: 'INVOICE',
+    invoices: [inv(1, [{ qty: 10, unitPrice: 100, orderId: 1 }], { status: 'CANCELLED' })] as never,
+  });
+  check('INVOICE: a cancelled invoice takes no receipt', cancelledInv.invoiceReceived.get(1) ?? 0, 0);
+  check('INVOICE: with nothing to settle the money is credit on account', cancelledInv.buyerCredit.get('1:INR')?.amount, 500);
+
+  // A DRAFT has not been sent to anybody. It must be neither a debt nor a reduction of the
+  // order book, or a receivable would appear the moment somebody started typing an invoice.
+  const draft = buildFinanceContext(orders, [receipt(1, 500)] as never, noJobwork, null, {
+    basis: 'INVOICE',
+    invoices: [inv(1, [{ qty: 10, unitPrice: 100, orderId: 1 }], { status: 'DRAFT' })] as never,
+  });
+  check('INVOICE: a draft invoice is not yet a debt', draft.invoiceReceived.get(1) ?? 0, 0);
+  check('INVOICE: a draft does not reduce the order book either', draft.orderBook.get(1), 1000);
+
+  // A receipt recorded against an invoice ALSO carries the order it was raised against.
+  // Flipping the basis back to ORDER must still honour that order aim rather than dropping
+  // it and re-spreading the money oldest-first.
+  const bothAims = buildFinanceContext(orders, [receipt(1, 400, { invoiceId: 9, orderId: 2 })] as never, noJobwork, null);
+  check('ORDER: a receipt naming an absent invoice still honours its order', [bothAims.received.get(1), bothAims.received.get(2)], [0, 400]);
+
+  // --- a payment that NAMES its invoice is honoured over age ---------------
+  const aimed = buildFinanceContext(orders, [receipt(1, 500, { invoiceId: 2 })] as never, noJobwork, null, {
+    basis: 'INVOICE',
+    invoices: [inv(1, [{ qty: 10, unitPrice: 100, orderId: 1 }]), inv(2, [{ qty: 10, unitPrice: 300, orderId: 2 }])] as never,
+  });
+  check('INVOICE: a receipt naming an invoice settles that one first', [aimed.invoiceReceived.get(1), aimed.invoiceReceived.get(2)], [0, 500]);
 }
 
 // ---------------------------------------------------------------------------
@@ -850,28 +1200,44 @@ console.log('\n--- what survives a wipe ---');
   check('a name that only contains the prefix later is not kept', survivesWipe('order-company-logo-sneaky.pdf'), false);
 }
 
-console.log('\n--- the client pricing mirror ---');
+console.log('\n--- the client mirrors ---');
 {
-  const body = (file: string): string | null => {
+  /**
+   * Each pair is one engine that exists twice: once for the API and once so the UI can
+   * answer the same question as you type. Everything from `from` to the end of the file
+   * must match byte for byte — the header comments above the marker are allowed to differ,
+   * because they address different readers.
+   *
+   * Add a pair here whenever you add a mirrored engine, or nothing stops it drifting.
+   */
+  const PAIRS = [
+    { name: 'pricing', server: 'server/src/lib/pricing.ts', client: 'client/src/util/pricing.ts', from: 'export const MARKETS' },
+    { name: 'shipping', server: 'server/src/lib/shipping.ts', client: 'client/src/util/shipping.ts', from: 'export const INCOTERMS' },
+  ];
+
+  const body = (file: string, from: string): string | null => {
     const full = path.join(__dirname, '..', '..', file);
     if (!fs.existsSync(full)) return null;
     const text = fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n');
-    const from = text.indexOf('export const MARKETS');
-    return from < 0 ? null : text.slice(from);
+    const at = text.indexOf(from);
+    return at < 0 ? null : text.slice(at);
   };
-  const server = body('server/src/lib/pricing.ts');
-  const client = body('client/src/util/pricing.ts');
-  check('both pricing files were found', [server != null, client != null], [true, true]);
-  check('the client mirror is identical to the server engine', server === client, true);
-  if (server && client && server !== client) {
-    const a = server.split('\n');
-    const b = client.split('\n');
-    for (let i = 0; i < Math.max(a.length, b.length); i++) {
-      if (a[i] !== b[i]) {
-        console.log(`        first difference at line ${i + 1} of the shared body:`);
-        console.log(`          server: ${a[i] ?? '(missing)'}`);
-        console.log(`          client: ${b[i] ?? '(missing)'}`);
-        break;
+
+  for (const p of PAIRS) {
+    const server = body(p.server, p.from);
+    const client = body(p.client, p.from);
+    check(`both ${p.name} files were found`, [server != null, client != null], [true, true]);
+    check(`the ${p.name} client mirror is identical to the server engine`, server === client, true);
+    if (server && client && server !== client) {
+      const a = server.split('\n');
+      const b = client.split('\n');
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        if (a[i] !== b[i]) {
+          console.log(`        first difference at line ${i + 1} of the shared body:`);
+          console.log(`          server: ${a[i] ?? '(missing)'}`);
+          console.log(`          client: ${b[i] ?? '(missing)'}`);
+          break;
+        }
       }
     }
   }

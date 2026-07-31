@@ -192,7 +192,7 @@ export default function OrderEditPage() {
           <InputNumber min={Math.max(r.committed, 1)} value={v} onChange={(val) => setLine(i, { qty: val ?? 1 })} style={{ width: 90 }} />
           {r.committed > 0 && (
             <div>
-              <Text type="secondary" style={{ fontSize: 11 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
                 min {r.committed}
               </Text>
             </div>
@@ -265,7 +265,7 @@ export default function OrderEditPage() {
         return (
           <span>
             {net !== gross && (
-              <Text type="secondary" delete style={{ fontSize: 11, display: 'block' }}>
+              <Text type="secondary" delete style={{ fontSize: 12, display: 'block' }}>
                 {money(gross, symbol)}
               </Text>
             )}

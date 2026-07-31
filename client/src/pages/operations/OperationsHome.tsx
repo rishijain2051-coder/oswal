@@ -11,12 +11,14 @@ import ForexSummaryCard, { useForexSummary } from '../../components/ForexSummary
 const { Title, Text } = Typography;
 
 const SECTIONS = [
+  { key: 'orders', title: 'Orders', icon: <FileDoneOutlined />, path: '/operations/orders', desc: 'The hub. Every piece, every stage, and everything the order later became.' },
   { key: 'proformas', title: 'Proformas', icon: <FileTextOutlined />, path: '/operations/proformas', desc: 'Make a PI, mail it to the buyer, record accept or reject.' },
-  { key: 'orders', title: 'Orders', icon: <FileDoneOutlined />, path: '/operations/orders', desc: 'The production board — every piece, every stage, in-house or vendor.' },
   { key: 'sheets', title: 'Material Sheets', icon: <ProfileOutlined />, path: '/operations/sheets', desc: 'What each job needs, printable per section.' },
-  { key: 'payments', title: 'Payments', icon: <WalletOutlined />, path: '/operations/payments', desc: 'What buyers owe us and what we owe out — worked out from the orders.' },
   { key: 'suppliers', title: 'Suppliers', icon: <ShopOutlined />, path: '/operations/suppliers', desc: 'Material and jobwork vendors.' },
-  { key: 'stock', title: 'Stock', icon: <InboxOutlined />, path: '/operations/stock', desc: 'Raw-material inward, outward and balances.' },
+  { key: 'stock', title: 'Raw Stock', icon: <InboxOutlined />, path: '/operations/stock', desc: 'Raw-material inward, outward and balances.' },
+  // Money moved to Finance, but the two figures it drives are worked out from these orders,
+  // so the way through to them belongs here.
+  { key: 'finance', title: 'Finance', icon: <WalletOutlined />, path: '/finance', desc: 'What buyers owe us and what we owe out — worked out from these orders.' },
 ];
 
 export default function OperationsHome() {
@@ -33,7 +35,7 @@ export default function OperationsHome() {
       <Title level={2} style={{ marginBottom: 2 }}>
         Operations
       </Title>
-      <Text type="secondary">Proforma → order → production board → payments.</Text>
+      <Text type="secondary">Proforma → order → production board. The order carries it from there — packing, dispatch and billing all hang off it.</Text>
 
       <Row gutter={[16, 16]} style={{ margin: '16px 0' }}>
         <Col xs={12} md={6}>
@@ -48,7 +50,7 @@ export default function OperationsHome() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small" hoverable onClick={() => navigate('/operations/orders')}>
-            <Statistic title="Pieces in production" value={d?.inProduction ?? 0} valueStyle={{ color: '#d48806' }} />
+            <Statistic title="Pieces in production" value={d?.inProduction ?? 0} valueStyle={{ color: '#874d00' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
@@ -63,16 +65,16 @@ export default function OperationsHome() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small" hoverable onClick={() => navigate('/operations/orders')}>
-            <Statistic title="Finished pieces" value={d?.finishedPieces ?? 0} valueStyle={{ color: '#389e0d' }} />
+            <Statistic title="Finished pieces" value={d?.finishedPieces ?? 0} valueStyle={{ color: '#237804' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
-          <Card size="small" hoverable onClick={() => navigate('/operations/payments')}>
-            <Statistic title="To collect (₹)" value={num(d?.receivable ?? 0, 0)} valueStyle={{ color: '#389e0d' }} />
+          <Card size="small" hoverable onClick={() => navigate('/finance/payments')}>
+            <Statistic title="To collect (₹)" value={num(d?.receivable ?? 0, 0)} valueStyle={{ color: '#237804' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
-          <Card size="small" hoverable onClick={() => navigate('/operations/payments')}>
+          <Card size="small" hoverable onClick={() => navigate('/finance/payments')}>
             <Statistic title="Owed out (₹)" value={num(d?.payable ?? 0, 0)} valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
@@ -106,7 +108,7 @@ export default function OperationsHome() {
               dataSource={d?.vendorLoad ?? []}
               locale={{ emptyText: 'Nothing out for jobwork' }}
               renderItem={(v) => (
-                <List.Item onClick={() => navigate('/operations/payments')} style={{ cursor: 'pointer' }}>
+                <List.Item onClick={() => navigate('/finance/payments')} style={{ cursor: 'pointer' }}>
                   <span>{v.vendorName}</span>
                   <Tag color="volcano">{v.pieces} pcs</Tag>
                 </List.Item>

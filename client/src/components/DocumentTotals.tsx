@@ -84,7 +84,7 @@ export default function DocumentTotals({ totals, symbol, compact }: { totals: To
         </div>
       ) : (
         <div style={{ textAlign: 'right', marginTop: 6 }}>
-          <Text type="secondary" style={{ fontSize: 11 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
             Export supply — zero rated, no GST
           </Text>
         </div>

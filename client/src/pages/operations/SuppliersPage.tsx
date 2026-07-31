@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Breadcrumb, Button, Card, Col, Collapse, Form, Input, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tag, Typography, App } from 'antd';
+import { Breadcrumb, Button, Card, Col, Collapse, Form, Input, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography, App } from 'antd';
 import { HomeOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -47,8 +47,10 @@ export default function SuppliersPage() {
       title: '', key: 'a', width: 90,
       render: (_: any, r: Supplier) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
-          {hasRole('Manager') && <Popconfirm title="Delete supplier?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>}
+          <Tooltip title="Edit this supplier">
+            <Button size="small" aria-label="Edit this supplier" icon={<EditOutlined />} onClick={() => openEdit(r)} />
+          </Tooltip>
+          {hasRole('Manager') && <Popconfirm title="Delete supplier?" onConfirm={() => del.mutate(r.id)} okButtonProps={{ danger: true }}><Tooltip title="Delete this supplier"><Button size="small" danger aria-label="Delete this supplier" icon={<DeleteOutlined />} /></Tooltip></Popconfirm>}
         </Space>
       ),
     }] : []),
