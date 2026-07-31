@@ -127,7 +127,7 @@ function PermissionRow({
 }
 
 export default function RolesPage() {
-  const { can, isOwner, user } = useAuth();
+  const { can, isOwner, user, refreshUser } = useAuth();
   const { message } = App.useApp();
   const [form] = Form.useForm();
 
@@ -185,6 +185,9 @@ export default function RolesPage() {
         permissions: [...picked],
       });
       message.success(editing ? 'Role updated.' : 'Role created.');
+      // If that was your own role, what you may do has just changed on the server — the menu
+      // and every gated button have to be told, or they keep offering what is now refused.
+      if (editing && user?.role?.id === editing.id) await refreshUser();
       setOpen(false);
       setEditing(null);
     } catch (e) {

@@ -83,22 +83,22 @@ export default function WagesPage() {
       <Row gutter={[16, 16]} style={{ margin: '16px 0' }}>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Owed to workers (₹)" value={num(summary?.money.workerDue ?? 0, 0)} valueStyle={{ color: '#cf1322' }} />
+            <Statistic title="Owed to workers (₹)" value={num(summary?.money?.workerDue ?? 0, 0)} valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Owed to gangs (₹)" value={num(summary?.money.contractorDue ?? 0, 0)} valueStyle={{ color: '#cf1322' }} />
+            <Statistic title="Owed to gangs (₹)" value={num(summary?.money?.contractorDue ?? 0, 0)} valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Advances outstanding (₹)" value={num(summary?.money.advanceOutstanding ?? 0, 0)} valueStyle={{ color: '#d4380d' }} />
+            <Statistic title="Advances outstanding (₹)" value={num(summary?.money?.advanceOutstanding ?? 0, 0)} valueStyle={{ color: '#d4380d' }} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="Paid out so far (₹)" value={num(summary?.money.wagesPaid ?? 0, 0)} valueStyle={{ color: '#237804' }} />
+            <Statistic title="Paid out so far (₹)" value={num(summary?.money?.wagesPaid ?? 0, 0)} valueStyle={{ color: '#237804' }} />
           </Card>
         </Col>
       </Row>

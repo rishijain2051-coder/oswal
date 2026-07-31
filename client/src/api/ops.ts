@@ -386,15 +386,24 @@ export interface Order {
   taxMarket?: string | null;
   taxBuyerState?: string | null;
   taxCompanyState?: string | null;
-  total: number;
-  /** Subtotal, charges and the CGST/SGST/IGST breakdown behind `total`. */
-  totals: DocumentTotals;
+  /**
+   * NULL when the caller does not hold `money.view` — the server blanks these rather than
+   * sending zeroes, so a page cannot show "nothing outstanding" to somebody who simply is not
+   * allowed to know. Every reader has to handle it; the types say so on purpose.
+   */
+  total: number | null;
+  /** Subtotal, charges and the CGST/SGST/IGST breakdown behind `total`. Null with the above. */
+  totals: DocumentTotals | null;
   /** Will this make its date? Derived from the board, never stored. */
   delivery: DeliveryVerdict;
   expectedDelivery?: string | null;
   summary: { ordered: number; done: number; wip: number; pending: number; progressPct: number };
+  /** Pieces × rate, so it is emptied without `board.rates` or `money.view`. */
   jobwork: { vendorId: number; vendorName: string; pieces: number; amount: number; stages: string[] }[];
-  money: OrderMoney;
+  money: OrderMoney | null;
+  /** Set when the figures above were withheld, so a page can say so rather than show zero. */
+  moneyHidden?: boolean;
+  ratesHidden?: boolean;
   ledger: LedgerEntry[];
   /** Present on the response to a move submission. */
   createdMoves?: number;
@@ -749,10 +758,22 @@ export interface OpsDashboard {
   atVendors: number;
   pendingPieces: number;
   finishedPieces: number;
-  jobworkAccrued: number;
-  receivable: number;
-  payable: number;
-  buyerCredit: number;
+  /**
+   * The money half. NULL without `money.view` — the board figures above are for the floor and
+   * these are not, so the server withholds them rather than sending zeroes. `num()` renders
+   * null as an em dash, which is the intended reading: not "nothing owed", but "not for you".
+   */
+  jobworkAccrued: number | null;
+  receivable: number | null;
+  payable: number | null;
+  buyerCredit: number | null;
+  /** And these need `wages.view`, which is a different permission again. */
+  headcount: number | null;
+  wagesDue: number | null;
+  contractorDue: number | null;
+  statutoryDue: number | null;
+  moneyHidden?: boolean;
+  wagesHidden?: boolean;
   vendorLoad: { vendorId: number; vendorName: string; pieces: number }[];
   recentProformas: { id: number; number: string; buyer: string; status: string; date: string }[];
   lowStock: { id: number; name: string; unit: string; balance: number; reorderLevel: number }[];

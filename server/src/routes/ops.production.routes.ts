@@ -1627,7 +1627,13 @@ router.delete(
 router.get(
   '/ops/dashboard',
   canAny('orders.view', 'board.view', 'money.view'),
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    // The board half of this dashboard is for the floor and the money half is not, so the
+    // money is only COMPUTED when the caller may see it — `financeTotals()` allocates every
+    // payment in the system, which is real work to do and then throw away.
+    const seesMoney = may(req, 'money.view');
+    const seesWages = may(req, 'wages.view');
+
     const [openOrders, awaitingDecision, recentProformas, rawItems, stockGrouped, liveLines, financials] = await Promise.all([
       prisma.order.findMany({ where: { ...notDeleted, status: { notIn: ['Shipped', 'Closed', 'Cancelled'] } }, select: { id: true } }),
       prisma.proforma.count({ where: { ...notDeleted, status: 'Sent' } }),
@@ -1639,7 +1645,7 @@ router.get(
         include: { stages: { include: { vendor: { select: { id: true, name: true } } }, orderBy: { sortOrder: 'asc' } }, moves: true },
       }),
       // One source of truth for the money, shared with the Payments page.
-      financeTotals(),
+      seesMoney || seesWages ? financeTotals() : null,
     ]);
 
     let inProduction = 0;
@@ -1679,14 +1685,19 @@ router.get(
       atVendors,
       pendingPieces,
       finishedPieces,
-      jobworkAccrued: financials.jobworkAccrued,
-      receivable: financials.receivableInr,
-      payable: financials.payableInr,
-      buyerCredit: financials.buyerCreditInr,
-      headcount: financials.headcount,
-      wagesDue: financials.wagesDue,
-      contractorDue: financials.contractorDue,
-      statutoryDue: financials.statutoryDue,
+      // Buyer and vendor money needs `money.view`; what people are owed needs `wages.view`.
+      // Null rather than zero, so the front page says "you cannot see this" instead of
+      // showing nothing outstanding and being believed.
+      jobworkAccrued: seesMoney ? financials!.jobworkAccrued : null,
+      receivable: seesMoney ? financials!.receivableInr : null,
+      payable: seesMoney ? financials!.payableInr : null,
+      buyerCredit: seesMoney ? financials!.buyerCreditInr : null,
+      headcount: seesWages || seesMoney ? financials!.headcount : null,
+      wagesDue: seesWages ? financials!.wagesDue : null,
+      contractorDue: seesWages ? financials!.contractorDue : null,
+      statutoryDue: seesWages ? financials!.statutoryDue : null,
+      moneyHidden: !seesMoney,
+      wagesHidden: !seesWages,
       vendorLoad: Array.from(vendorLoad.values()).sort((a, b) => b.pieces - a.pieces),
       recentProformas: recentProformas.map((p) => ({ id: p.id, number: p.number, buyer: p.buyer.name, status: p.status, date: p.date })),
       lowStock,

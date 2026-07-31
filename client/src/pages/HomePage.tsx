@@ -34,13 +34,19 @@ const { Title, Text } = Typography;
  * off: open one and you reach its proforma, products, material sheets, cartons, containers,
  * invoices and money without going back to a list.
  */
+/**
+ * `needs` lists the permissions that can open the module, ANY of which is enough — they match
+ * the `NeedsAny` gate on each section's route in App.tsx. A card whose module the visitor
+ * cannot enter is not shown at all: the front page is meant to say where everything lives, and
+ * six cards of which three lead to a refusal say the opposite.
+ */
 const MODULES = [
-  { key: 'orders', title: 'Orders', icon: <FileDoneOutlined />, path: '/operations/orders', ready: true, desc: 'The hub — the production board, and everything an order later became.' },
-  { key: 'operations', title: 'Operations', icon: <ToolOutlined />, path: '/operations', ready: true, desc: 'Proformas, delivery, material sheets, suppliers & raw stock.' },
-  { key: 'sales', title: 'Dispatch', icon: <ShoppingOutlined />, path: '/sales', ready: true, desc: 'Finished stock, packing, containers & shipments.' },
-  { key: 'finance', title: 'Finance', icon: <WalletOutlined />, path: '/finance', ready: true, desc: 'Receivables, payables, receipts, payments & invoices.' },
-  { key: 'manforce', title: 'Manforce', icon: <TeamOutlined />, path: '/manforce', ready: true, desc: 'Workers, muster roll, wages, advances & statutory dues.' },
-  { key: 'product', title: 'Products', icon: <AppstoreOutlined />, path: '/products', ready: true, desc: 'Catalogue, product details & costing sheets.' },
+  { key: 'orders', title: 'Orders', icon: <FileDoneOutlined />, path: '/operations/orders', ready: true, desc: 'The hub — the production board, and everything an order later became.', needs: ['orders.view'] },
+  { key: 'operations', title: 'Operations', icon: <ToolOutlined />, path: '/operations', ready: true, desc: 'Proformas, delivery, material sheets, suppliers & raw stock.', needs: ['orders.view', 'proformas.view', 'sheets.view', 'stock.view', 'suppliers.view'] },
+  { key: 'sales', title: 'Dispatch', icon: <ShoppingOutlined />, path: '/sales', ready: true, desc: 'Finished stock, packing, containers & shipments.', needs: ['finished.view', 'packing.view', 'shipments.view'] },
+  { key: 'finance', title: 'Finance', icon: <WalletOutlined />, path: '/finance', ready: true, desc: 'Receivables, payables, receipts, payments & invoices.', needs: ['money.view', 'payments.view', 'invoices.view'] },
+  { key: 'manforce', title: 'Manforce', icon: <TeamOutlined />, path: '/manforce', ready: true, desc: 'Workers, muster roll, wages, advances & statutory dues.', needs: ['workers.view', 'wages.view'] },
+  { key: 'product', title: 'Products', icon: <AppstoreOutlined />, path: '/products', ready: true, desc: 'Catalogue, product details & costing sheets.', needs: ['products.view'] },
 ];
 
 /** One figure, what it means, and where to go about it. */
@@ -82,7 +88,7 @@ function Kpi({
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { user, can } = useAuth();
+  const { user, can, canAny } = useAuth();
   const { data: ops } = useOpsDashboard();
   const { data: sales } = useSalesDashboard();
   // Money is Manager+ everywhere else in the app, so it must not appear here either. The
@@ -168,7 +174,7 @@ export default function HomePage() {
       </Row>
 
       <Row gutter={[20, 20]}>
-        {MODULES.map((m) => (
+        {MODULES.filter((m) => canAny(...m.needs)).map((m) => (
           <Col key={m.key} xs={24} sm={12} lg={8}>
             <Card
               className="module-card"

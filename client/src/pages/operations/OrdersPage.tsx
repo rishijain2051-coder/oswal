@@ -82,7 +82,12 @@ export default function OrdersPage() {
         </div>
       ),
     },
-    { title: 'Total', dataIndex: 'total', align: 'right', width: 130, render: (v, r) => money(v, r.currency?.symbol ?? '₹') },
+    // Dropped rather than filled with em dashes: the server sends no total without
+    // `money.view`, and a column of "—" down the whole list is just a question nobody
+    // can answer.
+    ...(can('money.view')
+      ? [{ title: 'Total', dataIndex: 'total', align: 'right' as const, width: 130, render: (v: number | null, r: Order) => money(v, r.currency?.symbol ?? '₹') }]
+      : []),
     { title: 'Status', dataIndex: 'status', width: 110, render: (s) => <Tag color={ORDER_STATUS_COLOR[s] ?? 'default'}>{s}</Tag> },
     {
       title: 'On time?',

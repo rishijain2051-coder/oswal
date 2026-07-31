@@ -67,6 +67,7 @@ import {
   permissionsByModule,
   withRequired,
 } from '../src/lib/permissions';
+import { stripFulfilmentMoney, stripOrderMoney, stripOrderRates } from '../src/lib/moneyRedaction';
 
 let failed = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -1346,6 +1347,101 @@ console.log('\n--- permissions: the catalogue and the routes agree ---');
     const guard = at < 0 ? '' : financeText.slice(at, at + 200);
     check(`${route} is behind a money permission`, at >= 0 && /can\('money\./.test(guard), true);
   }
+}
+
+console.log('\n--- withholding money from a shared response ---');
+{
+  /**
+   * `serializeOrder` returns the priced total, the tax breakdown, the buyer's position and the
+   * jobwork accrued in the SAME object as the delivery date and the piece counts — so
+   * `orders.view` was handing all of it to a floor login, which the catalogue explicitly
+   * promises it does not. These check the blanking, because the failure mode is silent: the
+   * page still renders, it just shows money to somebody who may not see it.
+   *
+   * The nested cases are the ones that actually regressed in review. A line's `unitPrice` is
+   * the number the whole order value is built from, and a stage's `jobworkRate` is what a
+   * vendor is paid — blanking only the top-level `total` would have left both in place.
+   */
+  /**
+   * THE REAL RESPONSE SHAPE, not a plausible one.
+   *
+   * The first version of this fixture was invented from the field names that seemed likely,
+   * and it passed while the live board went on printing `₹55/pc` and `$11,700.00` — because
+   * the rates the UI renders live under `line.board.stages` (a derived copy) and the line
+   * value is `amount`, neither of which the fixture had. A fixture that omits a field cannot
+   * fail on it, so every money-bearing key below was copied off an actual `GET /orders/:id`.
+   */
+  const order = {
+    id: 7,
+    number: 'ORD-001',
+    deliveryDate: '2026-09-01',
+    summary: { ordered: 100, done: 40 },
+    total: 12_500,
+    totals: { subtotal: 12_000, grandTotal: 12_500 },
+    money: { receivable: 9_000, jobworkDue: 400 },
+    jobwork: [{ vendorId: 1, vendorName: 'Ace Polishing', pieces: 40, amount: 400 }],
+    lines: [
+      {
+        id: 11,
+        qty: 100,
+        productCode: 'AB-00123',
+        unitPrice: 125,
+        discountPct: 5,
+        discountAmt: 50,
+        amount: 11_700,
+        grossAmount: 12_500,
+        lineTotal: 11_700,
+        net: 11_700,
+        stages: [{ id: 21, name: 'polishing', jobworkRate: 12, labourRate: 3 }],
+        board: {
+          done: 40,
+          stages: [{ id: 21, name: 'polishing', at: 10, cleared: 60, reached: 60, jobworkRate: 12, labourRate: 3, jobworkValue: 720, labourValue: 180 }],
+        },
+        history: [{ id: 98, kind: 'REJECT', qty: 4, note: 'chipped', labourValue: 55 }],
+      },
+    ],
+  };
+
+  const blank = stripOrderMoney(order);
+  check('the quantities and dates survive', [blank.number, blank.deliveryDate, blank.summary.ordered, blank.lines[0].qty], ['ORD-001', '2026-09-01', 100, 100]);
+  check('the order value is blanked, not zeroed', [blank.total, blank.totals, blank.money], [null, null, null]);
+  check('a line price is blanked', [blank.lines[0].unitPrice, blank.lines[0].discountPct, blank.lines[0].discountAmt], [null, null, null]);
+  // The one the first attempt missed: `amount` is what the UI prints, not `unitPrice × qty`.
+  check('and so is what the line is WORTH', [blank.lines[0].amount, blank.lines[0].grossAmount, blank.lines[0].lineTotal, blank.lines[0].net], [null, null, null, null]);
+  check('the stored stage rate is blanked', [blank.lines[0].stages[0].jobworkRate, blank.lines[0].stages[0].labourRate], [null, null]);
+  // The other one it missed: the board strip reads its own derived copy of the rates.
+  check('the BOARD copy of the rate is blanked too', [blank.lines[0].board.stages[0].jobworkRate, blank.lines[0].board.stages[0].labourRate], [null, null]);
+  check('as are the multiplied-out values', [blank.lines[0].board.stages[0].jobworkValue, blank.lines[0].board.stages[0].labourValue], [null, null]);
+  check('and what a past movement earned', blank.lines[0].history[0].labourValue, null);
+  check('but the board itself is untouched', [blank.lines[0].board.stages[0].at, blank.lines[0].board.stages[0].cleared, blank.lines[0].board.done], [10, 60, 40]);
+  check('and so is the movement it earned on', [blank.lines[0].history[0].qty, blank.lines[0].history[0].note], [4, 'chipped']);
+  check('the jobwork list is emptied', blank.jobwork, []);
+  check('and the withholding is declared', [blank.moneyHidden, blank.ratesHidden], [true, true]);
+  // Zero would be read as "nothing outstanding", which is a claim rather than an absence.
+  check('nothing money-shaped came back as 0', [blank.total, blank.lines[0].unitPrice, blank.lines[0].amount, blank.lines[0].board.stages[0].labourValue].some((v) => v === 0), false);
+  check('the original object is untouched', [order.total, order.lines[0].amount, order.lines[0].board.stages[0].labourValue], [12_500, 11_700, 180]);
+
+  // Seeing what the buyer owes and seeing what the factory pays out are separate permissions,
+  // so there is a case for blanking the rates while keeping the value.
+  const ratesOnly = stripOrderRates(order);
+  check('rates-only keeps the order value', [ratesOnly.total, ratesOnly.money.receivable, ratesOnly.lines[0].amount], [12_500, 9_000, 11_700]);
+  check('rates-only clears every copy of the rates', [ratesOnly.lines[0].stages[0].jobworkRate, ratesOnly.lines[0].board.stages[0].labourRate, ratesOnly.lines[0].board.stages[0].labourValue, ratesOnly.jobwork], [null, null, null, []]);
+  check('rates-only keeps the line price', ratesOnly.lines[0].unitPrice, 125);
+  check('and says which half was withheld', [ratesOnly.ratesHidden, ratesOnly.moneyHidden], [true, undefined]);
+  check('a line with no board or history does not throw', stripOrderMoney({ lines: [{ id: 1, qty: 5 }] }).lines[0].qty, 5);
+
+  // A co-loaded invoice is returned WHOLE by the fulfilment read, so its total is a tax
+  // document's value and not this order's share — which is why it has to go.
+  const ful = {
+    orderId: 7,
+    totals: { shipped: 40, invoiced: 40 },
+    invoices: [{ number: 'INV-001', status: 'ISSUED', exchangeRate: 83, totals: { grandTotal: 12_500 }, charges: [{ name: 'Freight', amount: 200 }], mine: { pieces: 40 }, lines: [{ orderId: 7, qty: 40, unitPrice: 125 }] }],
+  };
+  const fb = stripFulfilmentMoney(ful);
+  check('which invoice billed the order survives', [fb.invoices[0].number, fb.invoices[0].status], ['INV-001', 'ISSUED']);
+  check('how many pieces were billed survives', [fb.invoices[0].mine.pieces, fb.totals.invoiced], [40, 40]);
+  check('the invoice value does not', [fb.invoices[0].totals, fb.invoices[0].exchangeRate, fb.invoices[0].charges], [null, null, []]);
+  check('nor its line prices', fb.invoices[0].lines[0].unitPrice, null);
 }
 
 console.log(failed === 0 ? '\nALL SELF-CHECKS PASSED' : `\n${failed} SELF-CHECK(S) FAILED`);

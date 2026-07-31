@@ -695,6 +695,38 @@ route asks for a key the catalogue lacks (no *ghosts*, which would be permanentl
   is allowed — worker identity (`workers.pii`), worker money (`wages.view`), product costing
   (`products.costing.view`). That stripping happens server-side; filtering in the client would
   still put the data on the wire.
+- **`server/src/lib/moneyRedaction.ts` blanks money on a response that also carries something
+  else**, which is most of them: `serializeOrder` returns the priced total, the tax breakdown,
+  the buyer's position and the jobwork accrued in the same object as the delivery date. It
+  lives outside the engines for the reason soft delete does — filtering belongs at the response
+  layer, and an engine that knew about the caller could not be tested with fixed inputs.
+  **A money figure appears at SIX depths of one serialized order** (`total`/`totals`/`money`,
+  the order's `jobwork`, the line's `amount`/`grossAmount`/`unitPrice`, `line.stages[]` rates,
+  `line.board.stages[]` rates *and* multiplied-out values, `line.board.jobwork[]`, and
+  `line.history[].labourValue`). The first attempt found two, and the board went on printing
+  `₹55/pc` and `₹8,640.00` — because the rates the UI reads are a DERIVED copy under
+  `line.board`, and the line value is `amount`, not `unitPrice × qty`. The verify.ts fixture is
+  now the real response shape rather than a plausible one, because **a fixture that omits a
+  field cannot fail on it**.
+- **Blank to null, never to zero, and hide the panel rather than showing it empty.** A payable
+  of ₹0 is a claim; "Nobody is owed anything yet" beside a real ₹4.3 lakh liability is a false
+  statement. Every strip sets a `*Hidden` flag so the UI can drop the tab, column or card
+  instead. Two consequences worth knowing: JSX assigned to a `const` is BUILT even if it is
+  filtered out of a tab list later, so the money tab is `null`-guarded at construction; and
+  `null <= 0` is **true** in JavaScript, which turned a hidden rate into a false "this vendor
+  stage is billing nothing" alarm on every outsourced stage.
+- **A permission that hides data can disable the permission that needs it.** `board.workers`
+  sees the stage rates — not as a loophole, but because attributing piece work is how wages are
+  earned, and the client's mirror of `validateMoveWorkers` refuses an attribution on a stage
+  whose rate reads as zero. Likewise `RoutingDrawer` must OMIT the rate fields (not send
+  zeroes) for a routing-only role: the server decides which permission a routing save needs by
+  looking at whether a rate is present, so sending them always meant that role was refused
+  every change it was supposed to be able to make — and sending zeroes would have wiped the
+  real rates.
+- **Every card, tab and menu entry names the permission that opens its target.** The front
+  page, Dispatch and Manforce landing pages each used one shared "Manager+" flag for several
+  destinations; under roles that showed cards leading straight to a refusal, and hid others
+  from people who held exactly the right permission.
 - **Some permissions depend on the PAYLOAD, not the route**, so they are checked in the handler
   and cannot be middleware: `board.reject` and `board.workers` on `POST /orders/:id/moves`,
   `board.rates` on the routing patch, `orders.pricing` on `PUT /orders/:id` (compared against

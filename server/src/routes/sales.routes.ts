@@ -19,7 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db';
 import { ApiError, asyncHandler, guardIdParams } from '../lib/http';
-import { authenticate, can, canAny } from '../middleware/auth';
+import { authenticate, can, canAny, may } from '../middleware/auth';
+import { stripFulfilmentMoney } from '../lib/moneyRedaction';
 import { nextDocNumber } from '../lib/numbering';
 import { round } from '../lib/costing';
 import { lockOrder } from '../lib/rowLock';
@@ -1513,7 +1514,7 @@ router.get(
 
     const sum = (pick: (l: (typeof lines)[number]) => number) => lines.reduce((a, l) => a + pick(l), 0);
 
-    res.json({
+    const payload = {
       orderId: order.id,
       number: order.number,
       lines,
@@ -1545,7 +1546,11 @@ router.get(
         const full = serializeInvoice(i, ourState);
         return { ...full, mine: { pieces: full.lines.filter((l) => l.orderId === orderId).reduce((a, l) => a + l.qty, 0) }, spansOrders: full.orders.length > 1 };
       }),
-    });
+    };
+
+    // Which invoice billed an order is a fulfilment fact and stays; what the document is
+    // WORTH is not. `orders.view` alone reached every invoice total through this read.
+    res.json(may(req, 'money.view') || may(req, 'invoices.view') ? payload : stripFulfilmentMoney(payload));
   })
 );
 
@@ -1556,7 +1561,9 @@ router.get(
 router.get(
   '/sales/dashboard',
   canAny('finished.view', 'shipments.view', 'invoices.view'),
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    // Counts of invoices are a dispatch fact; what they are WORTH is money.
+    const seesInvoiceValue = may(req, 'money.view') || may(req, 'invoices.view');
     const [pos, shipments, invoices, ourState] = await Promise.all([
       finishedPosition(),
       prisma.shipment.findMany({ where: notDeleted, include: shipmentInclude }),
@@ -1584,7 +1591,9 @@ router.get(
       shippedNotInvoiced: live.filter((s) => s.status !== 'PLANNED' && !s.invoices.some((v) => v.status === 'ISSUED')).length,
       invoicesDraft: priced.filter((i) => i.status === 'DRAFT').length,
       invoicesIssued: priced.filter((i) => i.status === 'ISSUED').length,
-      invoicedInr: round(priced.filter((i) => i.status === 'ISSUED').reduce((a, i) => a + i.totals.grandTotal * (i.exchangeRate ?? 1), 0)),
+      invoicedInr: seesInvoiceValue
+        ? round(priced.filter((i) => i.status === 'ISSUED').reduce((a, i) => a + i.totals.grandTotal * (i.exchangeRate ?? 1), 0))
+        : null,
     });
   })
 );

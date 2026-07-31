@@ -21,6 +21,16 @@ interface AuthContextValue {
   /** At least one of these — for a screen two different jobs reach. */
   canAny: (...keys: string[]) => boolean;
   isOwner: boolean;
+  /**
+   * Re-read who we are and what we may do.
+   *
+   * Needed because the permission list is fetched ONCE at mount and then held in state — it is
+   * not a react-query cache, so invalidating a query key does nothing to it. Editing your own
+   * role, or being moved to another one, changes what the server will allow on the very next
+   * request; without this the menu goes on offering what has just started being refused until
+   * somebody reloads the page.
+   */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -113,6 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(TOKEN_KEY, res.data.token);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    // A 401 is already handled by the interceptor, which clears the user; anything else is
+    // left alone rather than signing somebody out over a dropped request.
+    const res = await api.get<User>('/auth/me').catch(() => null);
+    if (res) setUser(res.data);
+  }, []);
+
   const value = useMemo<AuthContextValue>(() => {
     const held = new Set(user?.permissions ?? []);
     return {
@@ -124,8 +141,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       can: (...keys) => keys.length > 0 && keys.every((k) => held.has(k)),
       canAny: (...keys) => keys.some((k) => held.has(k)),
       isOwner: user?.isOwner ?? false,
+      refreshUser,
     };
-  }, [user, loading, login, logout, changePassword]);
+  }, [user, loading, login, logout, changePassword, refreshUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

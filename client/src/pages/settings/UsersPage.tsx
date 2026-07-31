@@ -12,7 +12,7 @@ import type { User } from '../../api/types';
 const { Title, Text } = Typography;
 
 export default function UsersPage() {
-  const { can, isOwner, user: me } = useAuth();
+  const { can, isOwner, user: me, refreshUser } = useAuth();
   const qc = useQueryClient();
   const { message } = App.useApp();
   const [form] = Form.useForm();
@@ -32,14 +32,16 @@ export default function UsersPage() {
       if (editing) return api.patch(`/users/${editing.id}`, values);
       return api.post('/users', values);
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       message.success('Saved.');
+      qc.invalidateQueries({ queryKey: ['users'] });
+      // Moving YOURSELF to another role changes what you may do on the very next request.
+      // `editing` is read before it is cleared below, and the identity is held in
+      // AuthContext state rather than a query cache — so it needs asking for again.
+      if (editing?.id === me?.id && (variables as { roleId?: number | null }).roleId !== undefined) void refreshUser();
       setOpen(false);
       setEditing(null);
       form.resetFields();
-      qc.invalidateQueries({ queryKey: ['users'] });
-      // Changing your own role changes what you may do, and permissions are resolved live.
-      qc.invalidateQueries({ queryKey: ['me'] });
     },
     onError: (e) => message.error(apiError(e)),
   });
@@ -51,10 +53,11 @@ export default function UsersPage() {
    */
   const setOwner = useMutation({
     mutationFn: async ({ id, isOwner: next }: { id: number; isOwner: boolean }) => api.patch(`/users/${id}/owner`, { isOwner: next }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       message.success('Owner status updated.');
       qc.invalidateQueries({ queryKey: ['users'] });
-      qc.invalidateQueries({ queryKey: ['me'] });
+      // Giving up your own owner status takes every permission with it, immediately.
+      if (variables.id === me?.id) void refreshUser();
     },
     onError: (e) => message.error(apiError(e)),
   });

@@ -352,7 +352,9 @@ export interface SalesDashboard {
   shippedNotInvoiced: number;
   invoicesDraft: number;
   invoicesIssued: number;
-  invoicedInr: number;
+  /** Null without `money.view` or `invoices.view` — the COUNTS above are a dispatch fact,
+   *  but what the invoices are worth is money. */
+  invoicedInr: number | null;
 }
 
 // ---------------------------------------------------------------------------

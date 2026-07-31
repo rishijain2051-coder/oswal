@@ -3,15 +3,17 @@ import { HomeOutlined, TeamOutlined, CalendarOutlined, WalletOutlined, SafetyCer
 import { Link, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { useManforceSummary } from '../../api/manforce';
+import { useAuth } from '../../auth/AuthContext';
 import { num } from '../../util/format';
 
 const { Title, Text } = Typography;
 
+/** Each card names the permission that opens its page, so none of them leads to a refusal. */
 const SECTIONS = [
-  { key: 'workers', title: 'Workers', icon: <TeamOutlined />, path: '/manforce/workers', desc: 'Everyone on the books — trade, rates, documents and a running account each.' },
-  { key: 'muster', title: 'Muster Roll', icon: <CalendarOutlined />, path: '/manforce/muster', desc: 'Mark the day. Everyone is presumed present, so you only record the exceptions.' },
-  { key: 'wages', title: 'Wages & Advances', icon: <WalletOutlined />, path: '/manforce/wages', desc: 'Pay anyone any amount any day, hand over advances, charge deductions.' },
-  { key: 'statutory', title: 'Statutory', icon: <SafetyCertificateOutlined />, path: '/manforce/statutory', desc: 'PF, ESI and the rest — computed from wages earned, owed only once you post it.' },
+  { key: 'workers', title: 'Workers', icon: <TeamOutlined />, path: '/manforce/workers', desc: 'Everyone on the books — trade, rates, documents and a running account each.', needs: ['workers.view'] },
+  { key: 'muster', title: 'Muster Roll', icon: <CalendarOutlined />, path: '/manforce/muster', desc: 'Mark the day. Everyone is presumed present, so you only record the exceptions.', needs: ['workers.view', 'muster.view'] },
+  { key: 'wages', title: 'Wages & Advances', icon: <WalletOutlined />, path: '/manforce/wages', desc: 'Pay anyone any amount any day, hand over advances, charge deductions.', needs: ['workers.view', 'wages.view'] },
+  { key: 'statutory', title: 'Statutory', icon: <SafetyCertificateOutlined />, path: '/manforce/statutory', desc: 'PF, ESI and the rest — computed from wages earned, owed only once you post it.', needs: ['workers.view', 'statutory.view'] },
 ];
 
 /**
@@ -22,10 +24,13 @@ const SECTIONS = [
  */
 export default function ManforceHome() {
   const navigate = useNavigate();
+  const { can } = useAuth();
   const { data: d } = useManforceSummary();
   const t = d?.today;
 
   const dayLabel = !t ? '' : t.holiday ? `Holiday — ${t.holiday}` : t.isWorkingDay ? 'Working day' : 'Weekly off';
+  /** Null without `wages.view` — the server withholds it, so this is the one presence test. */
+  const wages = d?.money ?? null;
 
   return (
     <div>
@@ -68,46 +73,53 @@ export default function ManforceHome() {
             </Text>
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card size="small" hoverable onClick={() => navigate('/manforce/wages')}>
-            <Statistic title="Wages owed (₹)" value={num(d?.money.workerDue ?? 0, 0)} valueStyle={{ color: '#cf1322' }} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              gangs {num(d?.money.contractorDue ?? 0, 0)} ₹
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small" hoverable onClick={() => navigate('/manforce/statutory')}>
-            <Statistic title="Statutory posted (₹)" value={num(d?.money.statutoryDue ?? 0, 0)} valueStyle={{ color: '#d46b08' }} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {d?.money.statutoryProvision ? `provisions ${num(d.money.statutoryProvision, 0)} ₹` : 'nothing unposted becomes a debt'}
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic title="Wages accrued (₹)" value={num(d?.money.wagesAccrued ?? 0, 0)} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              from attendance and the board
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic title="Paid out (₹)" value={num(d?.money.wagesPaid ?? 0, 0)} valueStyle={{ color: '#237804' }} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              wages and advances together
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small" hoverable onClick={() => navigate('/manforce/wages')}>
-            <Statistic title="Advances out (₹)" value={num(d?.money.advanceOutstanding ?? 0, 0)} valueStyle={{ color: '#d4380d' }} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              still to be worked off
-            </Text>
-          </Card>
-        </Col>
+        {/* The money half of the dashboard needs `wages.view`, and the server sends the whole
+            block as null without it. Hidden rather than zeroed: five cards reading ₹0 would
+            say the factory owes nobody anything, which is a claim and not an absence. */}
+        {wages && (
+          <>
+            <Col xs={12} md={6}>
+              <Card size="small" hoverable onClick={() => navigate('/manforce/wages')}>
+                <Statistic title="Wages owed (₹)" value={num(wages.workerDue, 0)} valueStyle={{ color: '#cf1322' }} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  gangs {num(wages.contractorDue, 0)} ₹
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small" hoverable onClick={() => navigate('/manforce/statutory')}>
+                <Statistic title="Statutory posted (₹)" value={num(wages.statutoryDue, 0)} valueStyle={{ color: '#d46b08' }} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {wages.statutoryProvision ? `provisions ${num(wages.statutoryProvision, 0)} ₹` : 'nothing unposted becomes a debt'}
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small">
+                <Statistic title="Wages accrued (₹)" value={num(wages.wagesAccrued, 0)} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  from attendance and the board
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small">
+                <Statistic title="Paid out (₹)" value={num(wages.wagesPaid, 0)} valueStyle={{ color: '#237804' }} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  wages and advances together
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card size="small" hoverable onClick={() => navigate('/manforce/wages')}>
+                <Statistic title="Advances out (₹)" value={num(wages.advanceOutstanding, 0)} valueStyle={{ color: '#d4380d' }} />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  still to be worked off
+                </Text>
+              </Card>
+            </Col>
+          </>
+        )}
         <Col xs={12} md={6}>
           <Card size="small" hoverable onClick={() => navigate('/manforce/muster')}>
             <Statistic title="Overtime today (h)" value={num(t?.overtimeHours ?? 0, 1)} />
@@ -118,6 +130,11 @@ export default function ManforceHome() {
         </Col>
       </Row>
 
+      {/* Both panels are lists of named people with amounts against them, so they are wages
+          and the server sends them empty without `wages.view`. They must be HIDDEN rather than
+          shown empty: "Nobody is owed anything yet" beside a real ₹4.3 lakh payable is not a
+          blank slate, it is a false statement. */}
+      {wages && (
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} md={12}>
           <Card size="small" title="Who is owed the most" extra={<Link to="/manforce/wages">pay someone</Link>}>
@@ -174,9 +191,10 @@ export default function ManforceHome() {
           </Card>
         </Col>
       </Row>
+      )}
 
       <Row gutter={[16, 16]}>
-        {SECTIONS.map((s) => (
+        {SECTIONS.filter((s) => can(...s.needs)).map((s) => (
           <Col key={s.key} xs={24} sm={12} lg={6}>
             <Card className="module-card" onClick={() => navigate(s.path)} style={{ height: '100%', borderTop: '4px solid #00695c' }}>
               <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>

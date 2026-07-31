@@ -159,16 +159,33 @@ export default function OrderDetailPage() {
   const symbol = o.currency?.symbol ?? '₹';
   const s = o.summary;
   const m = o.money;
-  const canManage = can('orders.status');
+  /**
+   * The order page reaches four other modules, so one flag cannot stand for all of it. Under
+   * the ranks a single "Manager+" test gated the Close/Cancel buttons, the ship shortcut and
+   * the links out to shipments and invoices; a role can hold any of those without the others,
+   * and a button that leads straight to a refusal is worse than no button.
+   */
+  const canSetStatus = can('orders.status') || can('orders.reopen');
+  const canShip = can('shipments.create');
+  const canSeeShipments = can('shipments.view');
+  const canSeeInvoices = can('invoices.view');
+  const canSeeMoney = can('money.view');
   // Closed and Cancelled are the terminal states a human owns; everything else follows the
   // board and the shipments.
   const terminal = o.status === 'Closed' || o.status === 'Cancelled';
   const missingRoutes = o.lines.filter((l) => l.needsStageLine);
   const anyPieces = o.lines.some((l) => l.board.stages.some((st) => st.at > 0));
-  // A vendor stage left at ₹0 silently bills nothing — worth saying out loud.
-  const unratedStages = o.lines.flatMap((l) =>
-    l.board.stages.filter((st) => st.vendorId && st.jobworkRate <= 0).map((st) => ({ line: l, stage: st }))
-  );
+  /**
+   * A vendor stage left at ₹0 silently bills nothing — worth saying out loud.
+   *
+   * Only asked when the rates are actually visible. Withheld, they arrive as null, and
+   * `null <= 0` is TRUE in JavaScript — so every outsourced stage on the order was being
+   * reported as unrated to a floor login, which is a false alarm about money it cannot see
+   * and could not have fixed.
+   */
+  const unratedStages = !can('board.rates')
+    ? []
+    : o.lines.flatMap((l) => l.board.stages.filter((st) => st.vendorId && (st.jobworkRate ?? 0) <= 0).map((st) => ({ line: l, stage: st })));
 
   const ft = f?.totals;
   /** This order's rows of the packing queue — what the pack drawer opens on. */
@@ -360,7 +377,7 @@ export default function OrderDetailPage() {
                 Pack {ft?.availableToPack ?? 0} pc
               </Button>
             )}
-            {canManage && (ft?.availableToShip ?? 0) > 0 && (
+            {canShip && (ft?.availableToShip ?? 0) > 0 && (
               <Button size="small" icon={<ContainerOutlined />} onClick={() => navigate(`/sales/shipments/new?buyerId=${o.buyer.id}`)}>
                 Ship {ft!.availableToShip} pc
               </Button>
@@ -537,7 +554,7 @@ export default function OrderDetailPage() {
           </Space>
         }
         extra={
-          canManage && (
+          canSeeShipments && (
             <Button size="small" onClick={() => navigate('/sales/shipments')}>
               All shipments
             </Button>
@@ -658,7 +675,7 @@ export default function OrderDetailPage() {
           </Space>
         }
         extra={
-          canManage && (
+          canSeeInvoices && (
             <Button size="small" onClick={() => navigate('/finance/invoices')}>
               All invoices
             </Button>
@@ -843,7 +860,13 @@ export default function OrderDetailPage() {
   // Money — this order's position, and the way through to Finance
   // -------------------------------------------------------------------------
 
-  const moneyTab = (
+  /**
+   * Built only when the caller may see money, because building it is not free of consequence:
+   * the JSX below reads `m.invoiced` and `o.totals.subtotal` as it is CONSTRUCTED, and the
+   * server sends both as null to somebody without `money.view`. Filtering the tab out of the
+   * list further down is not enough on its own — the element would already have been made.
+   */
+  const moneyTab = !canSeeMoney || !m || !o.totals ? null : (
     <Row gutter={16}>
       <Col xs={24} lg={14}>
         <Card
@@ -898,7 +921,7 @@ export default function OrderDetailPage() {
             <Button size="small" onClick={() => navigate('/finance/payments')}>
               Receipts &amp; Payments
             </Button>
-            {canManage && (
+            {canSeeInvoices && (
               <Button size="small" icon={<FileProtectOutlined />} onClick={() => navigate('/finance/invoices')}>
                 Invoices
               </Button>
@@ -1039,7 +1062,7 @@ export default function OrderDetailPage() {
           {/* Status is DERIVED (see the tag above); the only status a human sets is a
               terminal one. When the order is already Closed/Cancelled, the one action is to
               reopen it and hand it back to the board. */}
-          {canManage &&
+          {canSetStatus &&
             (terminal ? (
               <Popconfirm
                 title={`Reopen ${o.number}?`}
@@ -1133,8 +1156,10 @@ export default function OrderDetailPage() {
             </Text>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#4e342e' }}>{money(o.total, symbol)}</div>
             <Space size={6} wrap style={{ justifyContent: 'flex-end' }}>
-              {/* A domestic order's total is goods + charges + GST, so say which is which. */}
-              {(o.totals?.taxed || (o.totals?.charges?.length ?? 0) > 0) && (
+              {/* A domestic order's total is goods + charges + GST, so say which is which.
+                  `o.totals` is null without `money.view`, and the presence test has to come
+                  first so what follows can read it. */}
+              {o.totals && (o.totals.taxed || o.totals.charges.length > 0) && (
                 <Tooltip
                   title={
                     <span>
@@ -1151,11 +1176,15 @@ export default function OrderDetailPage() {
                   </Tag>
                 </Tooltip>
               )}
-              <Tooltip title="Still to collect on this order">
-                <Tag color={m.receivable > 0 ? 'red' : 'green'} style={{ margin: 0 }}>
-                  {money(m.receivable, symbol)} to collect
-                </Tag>
-              </Tooltip>
+              {/* `m` is null when the caller may not see money — the server blanks it rather
+                  than sending a zero, so this has to be a presence test, not `m.receivable`. */}
+              {m && (
+                <Tooltip title="Still to collect on this order">
+                  <Tag color={m.receivable > 0 ? 'red' : 'green'} style={{ margin: 0 }}>
+                    {money(m.receivable, symbol)} to collect
+                  </Tag>
+                </Tooltip>
+              )}
             </Space>
           </Col>
         </Row>
@@ -1196,31 +1225,43 @@ export default function OrderDetailPage() {
             ),
             children: paperwork,
           },
-          {
-            key: 'money',
-            label: (
-              <Space size={6}>
-                <WalletOutlined /> Money
-              </Space>
-            ),
-            children: moneyTab,
-          },
-          {
-            key: 'history',
-            label: (
-              <Space size={6}>
-                <HistoryOutlined /> History
-              </Space>
-            ),
-            children: (
-              <Card size="small" title="Who changed a price or a rate, and what it was before">
-                <ChangeLogList rootType="Order" rootId={o.id} what="order" />
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  Only money and rates are logged — a log of every keystroke would bury the one entry anybody ever needs. Piece movements are on each line under Production.
-                </Text>
-              </Card>
-            ),
-          },
+          // The tabs are FILTERED, not disabled: a tab that opens onto blanked figures invites
+          // the reading that there is no money against the order. The server withholds the
+          // numbers either way — this is so the page does not offer an empty room.
+          ...(canSeeMoney
+            ? [
+                {
+                  key: 'money',
+                  label: (
+                    <Space size={6}>
+                      <WalletOutlined /> Money
+                    </Space>
+                  ),
+                  children: moneyTab,
+                },
+              ]
+            : []),
+          // The log holds nothing BUT prices and rates, so seeing it is seeing money.
+          ...(can('orders.history')
+            ? [
+                {
+                  key: 'history',
+                  label: (
+                    <Space size={6}>
+                      <HistoryOutlined /> History
+                    </Space>
+                  ),
+                  children: (
+                    <Card size="small" title="Who changed a price or a rate, and what it was before">
+                      <ChangeLogList rootType="Order" rootId={o.id} what="order" />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Only money and rates are logged — a log of every keystroke would bury the one entry anybody ever needs. Piece movements are on each line under Production.
+                      </Text>
+                    </Card>
+                  ),
+                },
+              ]
+            : []),
         ]}
       />
 

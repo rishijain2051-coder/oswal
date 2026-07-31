@@ -1008,7 +1008,10 @@ router.delete(
 router.get(
   '/manforce/summary',
   canAny('workers.view', 'wages.view'),
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    // The headcount and today's muster are for whoever runs the floor; what everybody is owed
+    // is not. `workers.view` alone reached the whole money block before this.
+    const seesWages = may(req, 'wages.view');
     const today = dayStart(new Date());
     const [ctx, { rules, holidays }] = await Promise.all([buildWorkforceContext(), loadRules()]);
     const totals = workforceTotals(ctx);
@@ -1058,29 +1061,38 @@ router.get(
         overtimeHours: round(marks.reduce((a, m) => a + m.otHours, 0)),
         presumedPresent: presumed,
       },
-      money: {
-        wagesAccrued: totals.wagesAccrued,
-        wagesPaid: totals.wagesPaid,
-        workerDue: totals.workerDue,
-        contractorDue: totals.contractorDue,
-        advanceOutstanding: totals.advanceOutstanding,
-        statutoryDue: totals.statutoryDue,
-        statutoryProvision: totals.statutoryProvision,
-        payable: totals.payableInr,
-      },
+      // Withheld whole rather than zeroed — a payable of nothing is a claim, not an absence.
+      wagesHidden: !seesWages,
+      money: seesWages
+        ? {
+            wagesAccrued: totals.wagesAccrued,
+            wagesPaid: totals.wagesPaid,
+            workerDue: totals.workerDue,
+            contractorDue: totals.contractorDue,
+            advanceOutstanding: totals.advanceOutstanding,
+            statutoryDue: totals.statutoryDue,
+            statutoryProvision: totals.statutoryProvision,
+            payable: totals.payableInr,
+          }
+        : null,
       unlinked: ctx.unlinked,
       lastPosting: postings[0] ? { id: postings[0].id, number: postings[0].number, periodFrom: postings[0].periodFrom, periodTo: postings[0].periodTo } : null,
-      // Who is owed the most, for the landing page.
-      topDue: [...ctx.directWorkers]
-        .filter((w) => w.position.dueNow > 0)
-        .sort((a, b) => b.position.dueNow - a.position.dueNow)
-        .slice(0, 8)
-        .map((w) => ({ id: w.worker.id, code: w.worker.code, name: w.worker.name, dueNow: w.position.dueNow, earned: w.position.earned })),
-      advances: [...ctx.accounts.values()]
-        .filter((w) => w.position.advanceOutstanding > 0)
-        .sort((a, b) => b.position.advanceOutstanding - a.position.advanceOutstanding)
-        .slice(0, 8)
-        .map((w) => ({ id: w.worker.id, code: w.worker.code, name: w.worker.name, outstanding: w.position.advanceOutstanding, recovered: w.position.advanceRecovered })),
+      // Who is owed the most, for the landing page. Named individuals with amounts against
+      // them, so these are wages just as much as the totals above are.
+      topDue: seesWages
+        ? [...ctx.directWorkers]
+            .filter((w) => w.position.dueNow > 0)
+            .sort((a, b) => b.position.dueNow - a.position.dueNow)
+            .slice(0, 8)
+            .map((w) => ({ id: w.worker.id, code: w.worker.code, name: w.worker.name, dueNow: w.position.dueNow, earned: w.position.earned }))
+        : [],
+      advances: seesWages
+        ? [...ctx.accounts.values()]
+            .filter((w) => w.position.advanceOutstanding > 0)
+            .sort((a, b) => b.position.advanceOutstanding - a.position.advanceOutstanding)
+            .slice(0, 8)
+            .map((w) => ({ id: w.worker.id, code: w.worker.code, name: w.worker.name, outstanding: w.position.advanceOutstanding, recovered: w.position.advanceRecovered }))
+        : [],
     });
   })
 );

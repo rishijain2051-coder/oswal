@@ -157,8 +157,10 @@ export default function ProductDetailPage({ catalogueMode = false }: { catalogue
         defaultActiveKey="details"
         items={[
           { key: 'details', label: 'Details', children: detailsTab },
-          // Costing sheet is hidden in catalogue (price-free) mode.
-          ...(!catalogueMode
+          // Costing sheet is hidden in catalogue (price-free) mode, and the tab is dropped
+          // entirely for somebody without permission to see costings — an empty sheet reading
+          // "no costing sheet" would be a false statement about a product that has one.
+          ...(!catalogueMode && !p.costingHidden
             ? [{
                 key: 'costing',
                 label: 'Costing Sheet',
@@ -167,7 +169,11 @@ export default function ProductDetailPage({ catalogueMode = false }: { catalogue
             : []),
           { key: 'related', label: `Related (${p.related.length})`, children: relatedTab },
           // Rate changes are money, so they stay out of the price-free catalogue view.
-          ...(!catalogueMode ? [{ key: 'history', label: 'History', children: <ChangeLogList rootType="Product" rootId={p.id} what="product" /> }] : []),
+          // The log holds nothing but rates, so it needs its own permission — the request
+          // behind it is refused otherwise, and the tab would show only an error.
+          ...(!catalogueMode && can('products.history')
+            ? [{ key: 'history', label: 'History', children: <ChangeLogList rootType="Product" rootId={p.id} what="product" /> }]
+            : []),
           {
             key: 'images',
             label: `Images (${p.images.length})`,

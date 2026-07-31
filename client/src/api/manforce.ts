@@ -326,6 +326,11 @@ export interface ManforceSummary {
     overtimeHours: number;
     presumedPresent: number;
   };
+  /**
+   * NULL without `wages.view`. The headcount and today's muster above are for whoever runs
+   * the floor; what everybody is owed is a separate permission, so this block is withheld
+   * whole — a payable of zero would be a claim rather than an absence.
+   */
   money: {
     wagesAccrued: number;
     wagesPaid: number;
@@ -335,7 +340,8 @@ export interface ManforceSummary {
     statutoryDue: number;
     statutoryProvision: number;
     payable: number;
-  };
+  } | null;
+  wagesHidden?: boolean;
   unlinked: { partyName: string; billed: number; paid: number; balance: number }[];
   lastPosting: { id: number; number: string; periodFrom: string; periodTo: string } | null;
   topDue: { id: number; code: string; name: string; dueNow: number; earned: number }[];

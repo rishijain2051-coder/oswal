@@ -23,6 +23,7 @@ import { buildEml, mailtoUrl, proformaMail } from '../lib/mailDraft';
 import { imageUploader, keepRealImages, uploadDir } from '../lib/imageUpload';
 import { validateMoveWorkers } from '../lib/workforce';
 import { diffFields, logChanges } from '../lib/changeLog';
+import { stripOrderMoney, stripOrderRates } from '../lib/moneyRedaction';
 
 const router = Router();
 // A route param here is always a database id — see guardIdParams.
@@ -31,6 +32,34 @@ router.use(authenticate);
 
 // Hand-over photos share the product-image folder, served at /uploads behind auth.
 const uploadPhotos = imageUploader('move-');
+
+/**
+ * Blank what the caller may not see on a serialized order or proforma.
+ *
+ * `serializeOrder` returns the priced total, the tax breakdown, the buyer's position and the
+ * jobwork accrued alongside the delivery date and the piece counts, so `orders.view` was
+ * handing all of it to a floor login — which the catalogue explicitly promises it does not.
+ *
+ * The two are separate permissions and are stripped separately: somebody may legitimately see
+ * what the buyer owes without seeing what the factory pays its vendors, or the reverse.
+ */
+function priceForCaller<T extends Record<string, any>>(req: Parameters<typeof may>[0], rows: T[]): T[] {
+  const money = may(req, 'money.view');
+  /**
+   * `board.workers` sees the rates too, and that is not a loophole. Naming who did a stage is
+   * how piece-rate wages are earned, so the drawer has to tell those workers what they are
+   * about to earn — and the client's mirror of `validateMoveWorkers` refuses an attribution on
+   * a stage with no rate. Hidden, the rate arrives as null, the mirror reads it as zero, and
+   * the permission becomes unusable by the person holding it.
+   */
+  const rates = may(req, 'board.rates') || money || may(req, 'board.workers');
+  if (money && rates) return rows;
+  return rows.map((row) => {
+    const stripped = money ? row : stripOrderMoney(row);
+    // `stripOrderMoney` already clears the rates, so only the money-but-not-rates case is left.
+    return rates ? stripped : stripOrderRates(stripped);
+  });
+}
 
 export const ORDER_STATUSES = ['Confirmed', 'Production', 'Ready', 'Shipped', 'Closed', 'Cancelled'] as const;
 export const PROFORMA_STATUSES = ['Draft', 'Sent', 'Accepted', 'Rejected'] as const;
@@ -100,7 +129,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const status = req.query.status as string | undefined;
     const orders = await prisma.order.findMany({ where: { ...notDeleted, ...(status ? { status } : {}) }, include: orderInclude, orderBy: { orderDate: 'desc' } });
-    res.json(await serializeOrders(orders));
+    res.json(priceForCaller(req, await serializeOrders(orders)));
   })
 );
 
@@ -186,7 +215,7 @@ router.get(
   '/orders/:id',
   can('orders.view'),
   asyncHandler(async (req, res) => {
-    res.json(await loadSerializedOrder(Number(req.params.id)));
+    res.json(priceForCaller(req, [await loadSerializedOrder(Number(req.params.id))])[0]);
   })
 );
 

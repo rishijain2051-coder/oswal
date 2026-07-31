@@ -7,13 +7,19 @@ import { useAuth } from '../../auth/AuthContext';
 
 const { Title, Text } = Typography;
 
+/**
+ * Each card names the permission that OPENS ITS PAGE. It used to be a shared `manager: true`
+ * flag, which under roles meant the Shipments permission also decided whether the Invoices
+ * card appeared — so somebody who could invoice but not dispatch lost the link entirely, and
+ * somebody who could dispatch but not invoice was shown a card that leads to a refusal.
+ */
 const SECTIONS = [
-  { key: 'stock', title: 'Finished Stock', icon: <InboxOutlined />, path: '/sales/stock', desc: 'What is finished and still here — worked out from the board, never typed.' },
-  { key: 'packing', title: 'Packing', icon: <BoxPlotOutlined />, path: '/sales/packing', desc: 'Put finished pieces into cartons, with dims and weights from the product.' },
-  { key: 'shipments', title: 'Shipments', icon: <ContainerOutlined />, path: '/sales/shipments', desc: 'Load containers, check the fit, and dispatch.', manager: true },
+  { key: 'stock', title: 'Finished Stock', icon: <InboxOutlined />, path: '/sales/stock', desc: 'What is finished and still here — worked out from the board, never typed.', needs: 'finished.view' },
+  { key: 'packing', title: 'Packing', icon: <BoxPlotOutlined />, path: '/sales/packing', desc: 'Put finished pieces into cartons, with dims and weights from the product.', needs: 'packing.view' },
+  { key: 'shipments', title: 'Shipments', icon: <ContainerOutlined />, path: '/sales/shipments', desc: 'Load containers, check the fit, and dispatch.', needs: 'shipments.view' },
   // Invoicing is money, so it lives in Finance now. The way through to it stays here,
   // because "shipped, not invoiced" above is the row that sends you looking for it.
-  { key: 'invoices', title: 'Invoices', icon: <FileProtectOutlined />, path: '/finance/invoices', desc: 'In Finance. Bill what has gone out; prices come from the order.', manager: true },
+  { key: 'invoices', title: 'Invoices', icon: <FileProtectOutlined />, path: '/finance/invoices', desc: 'In Finance. Bill what has gone out; prices come from the order.', needs: 'invoices.view' },
 ];
 
 const money = (v: number) => `₹${(v ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
@@ -92,7 +98,7 @@ export default function SalesHome() {
       )}
 
       <Row gutter={[16, 16]} style={{ marginTop: 20 }}>
-        {SECTIONS.filter((s) => !s.manager || can('shipments.view')).map((s) => (
+        {SECTIONS.filter((s) => can(s.needs)).map((s) => (
           <Col xs={24} sm={12} lg={6} key={s.key}>
             <Link to={s.path}>
               <Card hoverable style={{ borderTop: '3px solid #4e342e', height: '100%' }}>
@@ -103,11 +109,8 @@ export default function SalesHome() {
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {s.desc}
                 </Text>
-                {s.manager && (
-                  <div style={{ marginTop: 8 }}>
-                    <Tag color="default">Manager+</Tag>
-                  </div>
-                )}
+                {/* The "Manager+" tag went with the ranks. A card is only here at all if the
+                    permission behind it is held, so labelling a tier would say nothing. */}
               </Card>
             </Link>
           </Col>

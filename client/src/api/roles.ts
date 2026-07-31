@@ -48,10 +48,6 @@ export function useSaveRole() {
       id ? (await api.put<Role>(`/roles/${id}`, body)).data : (await api.post<Role>('/roles', body)).data,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['roles'] });
-      // A role change can alter what the signed-in user may do, and the server resolves
-      // permissions live — so the identity behind `can()` has to be refetched too, or the
-      // menu would keep showing what the server has just started refusing.
-      qc.invalidateQueries({ queryKey: ['me'] });
       qc.invalidateQueries({ queryKey: ['users'] });
     },
   });

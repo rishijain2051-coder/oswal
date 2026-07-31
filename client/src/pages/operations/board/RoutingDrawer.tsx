@@ -4,6 +4,7 @@ import { HomeOutlined, ShopOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, apiError } from '../../../api/client';
 import { OPS_KEYS, useStageLines, useSuppliers, type Order, type OrderLineDto, type StageCell } from '../../../api/ops';
+import { useAuth } from '../../../auth/AuthContext';
 import { money } from '../../../util/format';
 import { RateHint } from '../../../components/HistoryHint';
 
@@ -26,8 +27,12 @@ interface StageEdit {
 export default function RoutingDrawer({ order, line, onClose }: { order: Order; line: OrderLineDto | null; onClose: () => void }) {
   const qc = useQueryClient();
   const { message } = App.useApp();
+  const { can } = useAuth();
   const { data: vendors } = useSuppliers('JOBWORK');
   const { data: stageLines } = useStageLines();
+
+  /** Routing and pricing are separate permissions — this drawer edits both. */
+  const canSetRates = can('board.rates');
 
   const [stageLineId, setStageLineId] = useState<number | null>(null);
   const [stages, setStages] = useState<StageEdit[]>([]);
@@ -50,7 +55,21 @@ export default function RoutingDrawer({ order, line, onClose }: { order: Order; 
     mutationFn: () =>
       api.patch(`/order-lines/${line!.id}/routing`, {
         ...(stageLineId !== (line!.stageLineId ?? null) ? { stageLineId } : {}),
-        stages: stages.map((s) => ({ id: s.id, vendorId: s.vendorId, jobworkRate: s.jobworkRate, labourRate: s.labourRate })),
+        /**
+         * The rate fields are OMITTED, not zeroed, for somebody who may route but not price.
+         *
+         * The server decides which permission a routing save needs by looking at whether any
+         * rate is present in the payload, so sending them always meant a routing-only role
+         * was refused every change it was supposed to be able to make. Sending zeroes instead
+         * would be worse: the drawer seeds hidden rates as 0, so a save would have wiped the
+         * real ones. `undefined` keys drop out of the JSON body.
+         */
+        stages: stages.map((s) => ({
+          id: s.id,
+          vendorId: s.vendorId,
+          jobworkRate: canSetRates ? s.jobworkRate : undefined,
+          labourRate: canSetRates ? s.labourRate : undefined,
+        })),
       }),
     onSuccess: () => {
       message.success('Saved.');
@@ -63,10 +82,13 @@ export default function RoutingDrawer({ order, line, onClose }: { order: Order; 
   if (!line) return <Drawer open={false} onClose={onClose} />;
 
   const changingLine = stageLineId !== (line.stageLineId ?? null);
-  const missingRate = stages.find((s) => s.vendorId && s.jobworkRate <= 0);
+  // Both warnings are about rates, so neither is asked when the rates are withheld — the
+  // drawer seeds those as 0, which would report every outsourced stage as unpriced to
+  // somebody who cannot see the real figure and could not have set it.
+  const missingRate = canSetRates ? stages.find((s) => s.vendorId && s.jobworkRate <= 0) : undefined;
   // A vendor is paid for the stage, so an in-house piece rate on it would be a second
   // charge for the same work.
-  const doublePaid = stages.find((s) => s.vendorId && s.labourRate > 0);
+  const doublePaid = canSetRates ? stages.find((s) => s.vendorId && s.labourRate > 0) : undefined;
 
   const applyRange = () => {
     if (bulkFrom == null || bulkTo == null) return;

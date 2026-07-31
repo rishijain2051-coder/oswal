@@ -294,6 +294,12 @@ export interface ProductDetail {
   images: ProductImage[];
   related: RelatedLink[];
   costSheet?: CostSheet | null;
+  /**
+   * True when the sheet was WITHHELD for want of `products.costing.view`, as opposed to the
+   * product simply not having one. The difference matters on screen: "no costing sheet" and
+   * "you may not see the costing sheet" are different statements and only one of them is true.
+   */
+  costingHidden?: boolean;
   updatedAt: string;
   createdAt: string;
 }
