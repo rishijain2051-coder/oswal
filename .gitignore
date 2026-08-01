@@ -16,6 +16,15 @@ server/uploads.replaced-*/
 # cold backups of the cluster and uploads (npm run db:backup)
 server/backups/
 
+# Uploaded files — product photos, hand-over proof, worker documents, order attachments.
+# The FOLDER is tracked (via .gitkeep) because the app writes into it; its contents are not.
+# The demo photos are the ones that catch people out: they are committed once, in
+# `prisma/demo/assets/`, and COPIED here by `npm run db:demo` exactly as an upload would be.
+# Without this rule every seed leaves a dozen untracked jpegs that look like new work and can
+# be re-committed by accident — which is how they ended up in the repo the first time.
+server/uploads/*
+!server/uploads/.gitkeep
+
 # the SQLite database this project used before Postgres
 *.db
 *.db-journal

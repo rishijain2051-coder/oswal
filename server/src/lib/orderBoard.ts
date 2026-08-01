@@ -225,9 +225,19 @@ export async function financeContextFor(orders: { buyerId: number }[]): Promise<
     receivableBasis(),
   ]);
 
-  // Invoices are loaded ONLY when they are the debt. Under the ORDER basis they change
-  // nothing about allocation, and a list page should not pay for a join it will not read.
-  const invoices = basis === 'INVOICE' ? await loadFinanceInvoices(buyerIds) : [];
+  /**
+   * Invoices are loaded under BOTH bases.
+   *
+   * They used to be fetched only under INVOICE, on the reasoning that under ORDER they
+   * "change no figure" — which was true of allocation and false of everything else. They also
+   * feed `ctx.invoicedValue`, which `orderMoney` reports as `billed`: how much of an order's
+   * value has actually gone onto an invoice. Skipping the load did not make that figure
+   * cheap, it made it permanently ZERO, on the default setting, for every order in the app.
+   *
+   * Allocation is unaffected: `buildFinanceContext` only lets invoices widen the buyer set
+   * under INVOICE, precisely so this load cannot move a balance.
+   */
+  const invoices = await loadFinanceInvoices(buyerIds);
 
   // Jobwork accrued per vendor per order, straight off each board.
   const jobwork = new Map<number, Map<number, number>>();

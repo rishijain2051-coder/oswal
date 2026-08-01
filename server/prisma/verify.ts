@@ -1349,6 +1349,72 @@ console.log('\n--- permissions: the catalogue and the routes agree ---');
   }
 }
 
+console.log('\n--- what has been billed, under either basis ---');
+{
+  /**
+   * `billed` is how much of an order's value has actually gone onto an ISSUED invoice, and it
+   * is reported under BOTH bases. It was permanently zero under ORDER — the default — because
+   * the two loaders skipped fetching invoices there, on the reasoning that invoices "change no
+   * figure" under ORDER. True of allocation, false of this.
+   *
+   * The pair of checks matters more than either alone: `billed` must move, and the RECEIVABLE
+   * must not, or the fix would have quietly changed what every buyer owes.
+   */
+  const order = {
+    id: 1,
+    number: 'ORD-1',
+    buyerId: 9,
+    status: 'Confirmed',
+    orderDate: new Date('2026-01-01'),
+    exchangeRate: 1,
+    currency: { code: 'INR', symbol: '₹' },
+    buyer: { market: 'DOMESTIC', state: 'Rajasthan' },
+    taxMarket: 'DOMESTIC',
+    taxBuyerState: 'Rajasthan',
+    taxCompanyState: 'Rajasthan',
+    charges: [],
+    lines: [{ id: 1, qty: 10, unitPrice: 100, discountPct: 0, discountAmt: 0, gstRatePct: 0, stages: [], moves: [] }],
+  };
+  const invoice = {
+    id: 5,
+    number: 'INV-1',
+    buyerId: 9,
+    status: 'ISSUED',
+    invoiceDate: new Date('2026-02-01'),
+    exchangeRate: 1,
+    currency: { code: 'INR', symbol: '₹' },
+    buyer: { market: 'DOMESTIC', state: 'Rajasthan' },
+    taxMarket: 'DOMESTIC',
+    taxBuyerState: 'Rajasthan',
+    taxCompanyState: 'Rajasthan',
+    charges: [],
+    lines: [{ id: 1, orderId: 1, qty: 6, unitPrice: 100, discountPct: 0, discountAmt: 0, gstRatePct: 0 }],
+  };
+
+  const withInv = buildFinanceContext([order] as never, [], new Map(), 'Rajasthan', { basis: 'ORDER', invoices: [invoice] as never });
+  check('billed reflects the issued invoice under ORDER', withInv.invoicedValue.get(1), 600);
+  const noInv = buildFinanceContext([order] as never, [], new Map(), 'Rajasthan', { basis: 'ORDER', invoices: [] as never });
+  check('and is zero only when nothing has been invoiced', noInv.invoicedValue.get(1) ?? 0, 0);
+
+  // A DRAFT is not a bill, so it must not count under either basis.
+  const draft = { ...invoice, status: 'DRAFT' };
+  const withDraft = buildFinanceContext([order] as never, [], new Map(), 'Rajasthan', { basis: 'ORDER', invoices: [draft] as never });
+  check('a draft invoice is not billed', withDraft.invoicedValue.get(1) ?? 0, 0);
+
+  // The order book stays empty under ORDER, or a page could show the same money twice.
+  check('the order book stays empty under ORDER', withInv.orderBook.size, 0);
+
+  /**
+   * The load must not touch allocation. A buyer with an invoice but NO live order used to be
+   * absent from the buyer set under ORDER; if loading invoices added them, their receipts
+   * would allocate against no buckets and be reported as credit on account out of nowhere.
+   */
+  const strayInvoice = { ...invoice, id: 6, buyerId: 77, lines: [{ id: 2, orderId: null, qty: 1, unitPrice: 50, discountPct: 0, discountAmt: 0, gstRatePct: 0 }] };
+  const receipt = { id: 1, partyType: 'BUYER', kind: 'PAYMENT', buyerId: 77, orderId: null, invoiceId: null, amount: 50, currency: 'INR', date: new Date('2026-03-01') };
+  const stray = buildFinanceContext([order] as never, [receipt] as never, new Map(), 'Rajasthan', { basis: 'ORDER', invoices: [invoice, strayInvoice] as never });
+  check('an invoice-only buyer invents no credit under ORDER', stray.buyerCredit.size, 0);
+}
+
 console.log('\n--- withholding money from a shared response ---');
 {
   /**

@@ -332,9 +332,10 @@ async function financeData() {
    */
   const rateOf = (code: string) => currencies.find((c) => c.code === code)?.rateToBase ?? 1;
   const symbolOf = (code: string) => currencies.find((c) => c.code === code)?.symbol ?? '';
-  // Invoices are only the debt under the INVOICE basis; under ORDER they change no figure,
-  // so a list page should not pay for the join.
-  const invoices = basis === 'INVOICE' ? await loadFinanceInvoices([...new Set(orders.map((o) => o.buyerId))]) : [];
+  // Loaded under both bases — see the note in `financeContextFor`. They are only the DEBT
+  // under INVOICE, but they are what `billed` means under either, and the two funnels have to
+  // answer the same question the same way or the order page and this one disagree.
+  const invoices = await loadFinanceInvoices([...new Set(orders.map((o) => o.buyerId))]);
   return { orders, entries, rateOf, symbolOf, ourState, basis, invoices };
 }
 

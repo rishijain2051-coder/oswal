@@ -33,15 +33,15 @@ const upload = imageUploader('');
  * identity in manforce.routes.ts.
  */
 function stripCosting<T extends Record<string, any>>(row: T): T {
-  return {
-    ...row,
-    costSheet: undefined,
-    currency: undefined,
-    exFactory: null,
-    fob: null,
-    nonFob: null,
-    costingHidden: true,
-  };
+  const out: Record<string, any> = { ...row, costingHidden: true };
+  // Only blank what the row actually has. The LIST rows carry `fob` / `exFactory` /
+  // `nonFob` and the DETAIL row carries `costSheet`; adding the missing ones back as null
+  // would make the redacted shape differ from the real one by more than its values, and a
+  // reader checking `'fob' in product` would draw the wrong conclusion from it.
+  for (const key of ['costSheet', 'currency', 'exFactory', 'fob', 'nonFob']) {
+    if (key in out) out[key] = null;
+  }
+  return out as T;
 }
 
 const maybeStrip = <T extends Record<string, any>>(req: Parameters<typeof may>[0], rows: T[]): T[] =>

@@ -379,7 +379,14 @@ export function buildFinanceContext(
   }
 
   // --- buyers: their orders (or their invoices) are the debts, per currency --
-  const buyerIds = [...new Set([...live.map((o) => o.buyerId), ...liveInvoices.map((i) => i.buyerId)])];
+  //
+  // Invoices widen this set ONLY under the INVOICE basis, where they are the debt. Under
+  // ORDER they are loaded purely to fill `invoicedValue` above, and letting them add a buyer
+  // here would change allocation: a buyer with receipts but no live order would arrive with
+  // no buckets, and every one of their payments would be reported as credit on account.
+  const buyerIds = [
+    ...new Set([...live.map((o) => o.buyerId), ...(basis === 'INVOICE' ? liveInvoices.map((i) => i.buyerId) : [])]),
+  ];
   for (const buyerId of buyerIds) {
     const mine = live.filter((o) => o.buyerId === buyerId);
     const myInvoices = liveInvoices.filter((i) => i.buyerId === buyerId);
