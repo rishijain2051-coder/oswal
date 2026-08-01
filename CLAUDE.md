@@ -161,6 +161,21 @@ on ICEGATE, copies the table, pastes it; the client parses the **Export** column
 (last number per line) and the `POST /currencies/bulk-rates` endpoint applies it.
 `rateToBase` = INR per 1 unit of the currency (base = INR).
 
+## Buying — receipts only, and that is the decision
+
+**There are no purchase orders and no stock reservation. Both were considered and declined.**
+
+Material is RECEIVED, never ordered: a `StockTxn` of type IN against a supplier is the whole
+record, and `LedgerEntry.stockTxnId @unique` bills it once. Nothing tracks what is on its way,
+because a PO document would need its own numbering, an approval step and goods-receipt matching
+to be worth anything, and this factory buys timber from people it phones. Likewise raw stock is
+a running balance with no reservation, so two orders can both be planned against timber only one
+can have — the store knows, and a reservation model would touch every stock read to encode
+something a person already carries in their head.
+
+Say so plainly if either is asked for again rather than treating them as gaps: they are absent
+on purpose, and the cost of adding them is a new document lifecycle, not a column.
+
 ## Operations — the production board
 
 The factory flow is: **proforma → (accepted) → order → pieces move through stages →
