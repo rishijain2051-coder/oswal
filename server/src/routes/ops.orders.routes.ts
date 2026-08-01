@@ -9,7 +9,7 @@ import { nextDocNumber } from '../lib/numbering';
 import { computeCostSheet } from '../lib/productCosting';
 import { loadMethodMap } from '../lib/methods';
 import { round } from '../lib/costing';
-import { buildBoard, expandHops, MOVE_KINDS, validateMove, type MoveRow } from '../lib/production';
+import { buildBoard, expandHops, MOVE_KINDS, spansOnePieceGroup, validateMove, type MoveRow } from '../lib/production';
 import { loadOrder, loadSerializedOrder, materializeStages, orderInclude, resolveStageLineId, serializeOrders, syncOrderStatus } from '../lib/orderBoard';
 import { shippedQtyByOrderLine } from '../lib/salesBoard';
 import { orderPdf, proformaPdf } from '../lib/docPdf';
@@ -644,6 +644,11 @@ const routingSchema = z.object({
         jobworkRate: z.number().min(0).optional(),
         /** ₹ per piece for in-house workers. Zero is normal — that stage is day-wage. */
         labourRate: z.number().min(0).optional(),
+        /**
+         * Steps engaged at ONE agreed price share a label — "joining, sanding and polishing,
+         * ₹500 a piece". Empty string clears it, so a group can be broken up again.
+         */
+        pieceGroup: z.string().max(40).nullable().optional(),
         note: z.string().nullable().optional(),
       })
     )
@@ -702,6 +707,58 @@ router.patch(
       }
     }
 
+    /**
+     * Piece groups — a run of steps engaged at one agreed price.
+     *
+     * Two rules, checked against the WHOLE line rather than the payload, because a group is a
+     * property of the run and a request may touch only part of it:
+     *
+     * 1. The members must be CONTIGUOUS. Pieces pass through the steps in order, so a gap would
+     *    mean somebody else did the middle one, and the single price would be paying for work
+     *    that was not theirs.
+     * 2. Only the LAST member may carry the rate. That is what stores the agreed price exactly
+     *    once — the money engines then need no special case, because earning happens where it
+     *    always did, on the clearance leaving the stage that holds the rate.
+     */
+    const merged = line.stages
+      .map((cur) => {
+        const patch = (data.stages ?? []).find((s) => s.id === cur.id);
+        return {
+          ...cur,
+          vendorId: patch?.vendorId !== undefined ? patch.vendorId : cur.vendorId,
+          labourRate: patch?.labourRate !== undefined ? patch.labourRate : cur.labourRate,
+          pieceGroup: patch?.pieceGroup !== undefined ? patch.pieceGroup?.trim() || null : cur.pieceGroup,
+        };
+      })
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+
+    const groups = new Map<string, typeof merged>();
+    for (const s of merged) if (s.pieceGroup) groups.set(s.pieceGroup, [...(groups.get(s.pieceGroup) ?? []), s]);
+    for (const [name, members] of groups) {
+      if (members.length < 2) {
+        throw new ApiError(400, `"${name}" covers only one step. A paid-together group needs at least two — otherwise it is just that step's own rate.`);
+      }
+      const first = merged.indexOf(members[0]);
+      const contiguous = members.every((m, i) => merged[first + i]?.id === m.id);
+      if (!contiguous) {
+        throw new ApiError(400, `The steps in "${name}" are not next to each other. A single agreed price only makes sense for a run of consecutive steps.`);
+      }
+      if (members.some((m) => m.vendorId)) {
+        throw new ApiError(400, `"${name}" includes a step that goes to a vendor. A paid-together group is in-house work — the vendor is paid for their own stage.`);
+      }
+      const last = members[members.length - 1];
+      const earlyRate = members.slice(0, -1).find((m) => (m.labourRate ?? 0) > 0);
+      if (earlyRate) {
+        throw new ApiError(
+          400,
+          `Put the whole price for "${name}" on its last step ("${last.name}") and leave "${earlyRate.name}" at zero — the group is paid once, not per step.`
+        );
+      }
+      if ((last.labourRate ?? 0) <= 0) {
+        throw new ApiError(400, `"${name}" has no price. Put the agreed ₹/pc for the whole run on its last step, "${last.name}".`);
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       if (data.stageLineId !== undefined && data.stageLineId !== line.stageLineId) {
         await tx.orderLine.update({ where: { id: lineId }, data: { stageLineId: data.stageLineId } });
@@ -716,6 +773,7 @@ router.patch(
             ...(s.vendorId !== undefined ? { vendorId: s.vendorId } : {}),
             ...(s.jobworkRate !== undefined ? { jobworkRate: s.jobworkRate } : {}),
             ...(s.labourRate !== undefined ? { labourRate: s.labourRate } : {}),
+            ...(s.pieceGroup !== undefined ? { pieceGroup: s.pieceGroup?.trim() || null } : {}),
             ...(s.note !== undefined ? { note: s.note } : {}),
           },
         });
@@ -1188,15 +1246,36 @@ router.post(
         const hops = expandHops(boardBefore, { kind: m.kind, fromStageId: m.fromStageId ?? null, toStageId: m.toStageId ?? null, qty: m.qty });
 
         const workers = m.workers?.length ? m.workers : undefined;
+        /** Which hop the names go on — see the note below. Null until a clearance sets it. */
+        let workerHopFrom: number | null = null;
         if (workers) {
           // Only a clearance is work done. A release, a rejection or a return moves
           // pieces without anyone having finished anything.
           if (m.kind !== 'ADVANCE' && m.kind !== 'COMPLETE') throw new ApiError(400, 'Workers can only be named on a clearance — advancing pieces forward or finishing them.');
-          // Each hop is a different stage's work, so a clearance spanning several
-          // stages cannot say who did which. Clear them one stage at a time.
-          if (hops.length > 1) throw new ApiError(400, `That clearance crosses ${hops.length} stages, so it cannot say who did which. Clear one stage at a time to record the workers.`);
-          const stage = line.stages.find((s) => s.id === (m.fromStageId ?? null));
-          if (!stage) throw new ApiError(400, 'Pick the stage the work was done at before naming who did it.');
+          const startStage = line.stages.find((s) => s.id === (m.fromStageId ?? null));
+          if (!startStage) throw new ApiError(400, 'Pick the stage the work was done at before naming who did it.');
+          /**
+           * Each hop is normally a different stage's work, so a clearance spanning several
+           * cannot say who did which — UNLESS every stage it crosses belongs to one piece
+           * group, which is a run engaged at a single agreed price. Then there is nothing to
+           * split, and clearing the run in one action is exactly how such a job is worked.
+           */
+          const exitStage = line.stages.find((s) => s.id === (hops[hops.length - 1].fromStageId ?? null));
+          const bundled = hops.length > 1 && spansOnePieceGroup(startStage, exitStage) && hops.every((h) => spansOnePieceGroup(startStage, line.stages.find((s) => s.id === (h.fromStageId ?? null))));
+          if (hops.length > 1 && !bundled) {
+            throw new ApiError(400, `That clearance crosses ${hops.length} stages, so it cannot say who did which. Clear one stage at a time to record the workers, or group the steps into one paid-together job.`);
+          }
+          /**
+           * The stage the money hangs off: the LAST of the run, which is where a group's rate
+           * is stored. For a single hop it is the one being cleared, as before.
+           *
+           * `workerHopFrom` then puts the names on that hop ALONE. Attaching them to every hop
+           * would triple a worker's piece count on a three-step group — the earlier members pay
+           * nothing, so the money would still be right while the record of what they did was
+           * three times over.
+           */
+          const stage = bundled ? exitStage! : startStage;
+          workerHopFrom = stage.id;
           for (const w of workers) {
             const found = namedWorkers.find((x) => x.id === w.workerId);
             if (!found) throw new ApiError(404, `Worker #${w.workerId} not found.`);
@@ -1212,7 +1291,7 @@ router.post(
           if (hopErr) throw new ApiError(400, `${line.product.factoryCode} — ${hopErr}`);
           // A multi-stage clearance expands into one hop per stage; if the submission is unpaid
           // rework, every hop of it is, or the pieces would earn at the stages either side.
-          planned.push({ orderLineId: m.orderLineId, kind: hop.kind, fromStageId: hop.fromStageId, toStageId: hop.toStageId, qty: hop.qty, note: m.note?.trim() || comment, billable: m.billable !== false, workers });
+          planned.push({ orderLineId: m.orderLineId, kind: hop.kind, fromStageId: hop.fromStageId, toStageId: hop.toStageId, qty: hop.qty, note: m.note?.trim() || comment, billable: m.billable !== false, workers: workerHopFrom != null && hop.fromStageId === workerHopFrom ? workers : undefined });
           extra.push({ id: -1, kind: hop.kind, fromStageId: hop.fromStageId, toStageId: hop.toStageId, qty: hop.qty });
         }
         simulated.set(m.orderLineId, extra);

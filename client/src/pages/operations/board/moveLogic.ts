@@ -133,8 +133,28 @@ export function attributionState(board: LineBoard, from: Endpoint | null, to: En
   if (from.kind !== 'STAGE') return { allowed: false, stage: null };
   const stage = board.stages.find((s) => s.id === from.stage.id) ?? from.stage;
   if (stage.vendorId) return { allowed: false, stage, reason: `${stage.name} is outsourced — ${stage.vendor?.name ?? 'the vendor'} is paid for it.` };
-  if (hopsBetween(board, from, to).length > 1) {
-    return { allowed: false, stage, reason: 'This clearance crosses several stages, so it cannot say who did which. Clear one stage at a time to record the workers.' };
+  const hops = hopsBetween(board, from, to);
+  if (hops.length > 1) {
+    /**
+     * Mirror of the server's rule. A clearance crossing several stages normally cannot say who
+     * did which — unless every stage it crosses belongs to ONE piece group, a run of steps
+     * engaged at a single agreed price. Then there is nothing to split, and clearing the run in
+     * one action is exactly how such a job is worked.
+     *
+     * The money hangs off the LAST step of the run, which is where the group's rate is stored,
+     * so that is the stage returned for pricing and validation.
+     */
+    /**
+     * `hopsBetween` returns the stages pieces LAND on, so the ones actually CLEARED are the
+     * source plus every hop but the last: A→D is A→B, B→C, C→D, which clears A, B and C.
+     */
+    const crossed = [stage, ...hops.slice(0, -1)];
+    const group = stage.pieceGroup;
+    const bundled = !!group && crossed.every((s) => s.pieceGroup === group);
+    if (!bundled) {
+      return { allowed: false, stage, reason: 'This clearance crosses several stages, so it cannot say who did which. Clear one stage at a time to record the workers, or group the steps into one paid-together job.' };
+    }
+    return { allowed: true, stage: crossed[crossed.length - 1] };
   }
   return { allowed: true, stage };
 }

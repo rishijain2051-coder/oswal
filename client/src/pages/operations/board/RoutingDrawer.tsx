@@ -18,6 +18,8 @@ interface StageEdit {
   jobworkRate: number;
   /** In-house piece rate. Zero is normal: that stage is day-wage work. */
   labourRate: number;
+  /** Steps engaged at one agreed price share this label. Blank = paid on its own. */
+  pieceGroup: string | null;
 }
 
 /**
@@ -45,7 +47,7 @@ export default function RoutingDrawer({ order, line, onClose }: { order: Order; 
   useEffect(() => {
     if (!line) return;
     setStageLineId(line.stageLineId ?? null);
-    setStages(line.board.stages.map((s: StageCell) => ({ id: s.id, name: s.name, sortOrder: s.sortOrder, vendorId: s.vendorId, jobworkRate: s.jobworkRate ?? 0, labourRate: s.labourRate ?? 0 })));
+    setStages(line.board.stages.map((s: StageCell) => ({ id: s.id, name: s.name, sortOrder: s.sortOrder, vendorId: s.vendorId, jobworkRate: s.jobworkRate ?? 0, labourRate: s.labourRate ?? 0, pieceGroup: s.pieceGroup ?? null })));
     setBulkVendor(0);
     setBulkFrom(undefined);
     setBulkTo(undefined);
@@ -69,6 +71,7 @@ export default function RoutingDrawer({ order, line, onClose }: { order: Order; 
           vendorId: s.vendorId,
           jobworkRate: canSetRates ? s.jobworkRate : undefined,
           labourRate: canSetRates ? s.labourRate : undefined,
+          pieceGroup: canSetRates ? s.pieceGroup : undefined,
         })),
       }),
     onSuccess: () => {
@@ -89,6 +92,13 @@ export default function RoutingDrawer({ order, line, onClose }: { order: Order; 
   // A vendor is paid for the stage, so an in-house piece rate on it would be a second
   // charge for the same work.
   const doublePaid = canSetRates ? stages.find((s) => s.vendorId && s.labourRate > 0) : undefined;
+
+  /**
+   * A short list of labels rather than a free-text box. Two steps only belong to the same job
+   * if somebody picks the SAME label for both, and typing "Job A" against one and "job a"
+   * against the next would silently make two groups of one.
+   */
+  const groupOptions = ['Job A', 'Job B', 'Job C', 'Job D'].map((g) => ({ label: g, value: g }));
 
   const applyRange = () => {
     if (bulkFrom == null || bulkTo == null) return;
@@ -177,6 +187,28 @@ export default function RoutingDrawer({ order, line, onClose }: { order: Order; 
           value={r.labourRate}
           unitSuffix="/pc"
           onApply={(v) => setStages((prev) => prev.map((s) => (s.id === r.id ? { ...s, labourRate: v } : s)))}
+        />
+      ),
+    },
+    {
+      /**
+       * A run of steps engaged at one price. Give the same label to consecutive steps, put the
+       * whole ₹/pc on the LAST of them and leave the others blank — the server enforces both,
+       * so the agreed price is stored once and the run is paid once.
+       */
+      title: 'Paid together as',
+      dataIndex: 'pieceGroup',
+      width: 150,
+      render: (v: string | null, r: StageEdit) => (
+        <Select
+          size="small"
+          allowClear
+          style={{ width: 132 }}
+          value={v ?? undefined}
+          placeholder="on its own"
+          disabled={!!r.vendorId || !canSetRates}
+          options={groupOptions}
+          onChange={(val) => setStages((prev) => prev.map((s) => (s.id === r.id ? { ...s, pieceGroup: (val as string) ?? null } : s)))}
         />
       ),
     },

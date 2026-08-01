@@ -113,6 +113,12 @@ export interface StageCell {
   at: number;
   /** Pieces that moved forward out of here. */
   cleared: number;
+  /**
+   * Steps engaged at ONE agreed price share this label — "joining, sanding and polishing,
+   * ₹500 a piece". The rate sits on the LAST member; earlier ones are zero. A clearance
+   * spanning the whole run may name workers, which an ordinary multi-stage one may not.
+   */
+  pieceGroup?: string | null;
   /** Of those, the ones that earn — lower when rework was recorded at their own cost. */
   clearedBillable?: number;
   /** Of the billable ones, the pieces somebody was actually named for. */

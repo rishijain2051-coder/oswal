@@ -16,7 +16,7 @@ import path from 'node:path';
 import { BUILTIN_METHODS, round, suggestCostDim, type MethodMap } from '../src/lib/costing';
 import { computeCostSheet } from '../src/lib/productCosting';
 import { rowToMethodDef } from '../src/lib/methods';
-import { buildBoard, expandHops, impliedOrderStatus, validateMove, type MoveRow, type StageRow } from '../src/lib/production';
+import { buildBoard, expandHops, impliedOrderStatus, spansOnePieceGroup, validateMove, type MoveRow, type StageRow } from '../src/lib/production';
 import { allocateFifo, buildFinanceContext, buildStatement, jobworkEvents, receivablesByCurrency, type Bucket } from '../src/lib/finance';
 import {
   CBM_MISMATCH_PCT,
@@ -1347,6 +1347,58 @@ console.log('\n--- permissions: the catalogue and the routes agree ---');
     const guard = at < 0 ? '' : financeText.slice(at, at + 200);
     check(`${route} is behind a money permission`, at >= 0 && /can\('money\./.test(guard), true);
   }
+}
+
+console.log('\n--- steps paid together as one job ---');
+{
+  /**
+   * A labourer engaged for a run of steps at ONE agreed price — "joining, sanding and
+   * polishing, ₹500 a piece" — rather than a rate per step. The run shares a `pieceGroup`, the
+   * price sits on its LAST member, and the earlier ones hold zero.
+   *
+   * Storing it that way is what keeps the money engines free of special cases: earning still
+   * happens on the clearance leaving the stage that carries the rate, exactly as it always did.
+   * What the group buys is ATTRIBUTION across the run, which is otherwise refused.
+   */
+  const bundled: StageRow[] = [
+    { id: 1, name: 'joining', sortOrder: 0, vendorId: null, jobworkRate: 0, labourRate: 0, pieceGroup: 'Job A' },
+    { id: 2, name: 'sanding', sortOrder: 1, vendorId: null, jobworkRate: 0, labourRate: 0, pieceGroup: 'Job A' },
+    { id: 3, name: 'polishing', sortOrder: 2, vendorId: null, jobworkRate: 0, labourRate: 500, pieceGroup: 'Job A' },
+    { id: 4, name: 'qc', sortOrder: 3, vendorId: null, jobworkRate: 0, labourRate: 40 },
+  ];
+  const line = { id: 1, qty: 10, stages: bundled, product: { factoryCode: 'X', name: 'X' } };
+
+  // Worked as such a job is: the run cleared in ONE action, the worker named once on the hop
+  // that leaves the stage holding the price.
+  const oneGo: MoveRow[] = [
+    { id: 1, kind: 'RELEASE', fromStageId: null, toStageId: 1, qty: 10 },
+    { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 10 },
+    { id: 3, kind: 'ADVANCE', fromStageId: 2, toStageId: 3, qty: 10 },
+    { id: 4, kind: 'ADVANCE', fromStageId: 3, toStageId: 4, qty: 10, workers: [{ workerId: 7, pieces: 10 }] },
+  ];
+  const b = buildBoard(10, bundled, oneGo);
+  const earned = labourEvents({ id: 1, number: 'ORD-1' }, { ...line, moves: oneGo } as never);
+  check('the run is paid once, at the agreed price', earned.reduce((a, e) => a + e.amount, 0), 10 * 500);
+  check('and the board says the same', b.stages.reduce((a, s) => a + s.labourValue, 0), 10 * 500);
+  check('the worker is credited the pieces ONCE, not once per step', earned.reduce((a, e) => a + e.pieces, 0), 10);
+  check('the unpaid members of the run are never flagged', [b.stages[0].unattributed, b.stages[1].unattributed], [0, 0]);
+  check('nor is the step that carries the price, once it is named', b.stages[2].unattributed, 0);
+
+  // The same run cleared without naming anybody is still reported, once, on the priced step.
+  const nobody = oneGo.map((m) => (m.id === 4 ? { ...m, workers: undefined } : m));
+  const nb = buildBoard(10, bundled, nobody);
+  check('cleared with nobody named, the run reports once', nb.stages.map((s) => s.unattributed), [0, 0, 10, 0]);
+
+  /**
+   * The attribution rule itself, which the client mirrors in `moveLogic.ts`. Only a run whose
+   * every crossed step belongs to the same group may be attributed in one action — the reason
+   * a multi-stage clearance is normally refused is that each step has its own price, and with
+   * one price for the run there is nothing left to split.
+   */
+  check('a run of one group may be attributed', spansOnePieceGroup(bundled[0], bundled[2]), true);
+  check('crossing out of the group may not', spansOnePieceGroup(bundled[0], bundled[3]), false);
+  check('nor may two ungrouped steps', spansOnePieceGroup(bundled[3], bundled[3]), false);
+  check('a step in no group is never bundled with itself', spansOnePieceGroup({ pieceGroup: null }, { pieceGroup: null }), false);
 }
 
 console.log('\n--- in-house piece work nobody was named for ---');

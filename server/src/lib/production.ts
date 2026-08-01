@@ -23,6 +23,24 @@
 export const MOVE_KINDS = ['RELEASE', 'ADVANCE', 'REJECT', 'COMPLETE', 'RETURN'] as const;
 export type MoveKind = (typeof MOVE_KINDS)[number];
 
+/**
+ * Are these two stages the two ends of ONE paid-together job?
+ *
+ * A run of steps engaged at a single price — "joining, sanding and polishing, ₹500 a piece" —
+ * is marked with a shared `pieceGroup`. Clearing the whole run in one action may name workers,
+ * which an ordinary multi-stage clearance may not: with one price for the run there is nothing
+ * to split between the steps, which was the only reason to refuse it.
+ *
+ * Exported because the client mirrors this rule in `moveLogic.ts` and the two must agree.
+ */
+export function spansOnePieceGroup(
+  from: { pieceGroup?: string | null } | null | undefined,
+  exit: { pieceGroup?: string | null } | null | undefined
+): boolean {
+  const g = from?.pieceGroup;
+  return !!g && g === exit?.pieceGroup;
+}
+
 export interface StageRow {
   id: number;
   name: string;
@@ -31,6 +49,11 @@ export interface StageRow {
   jobworkRate: number;
   /** ₹ per piece an in-house worker earns for clearing this stage. 0 = day-wage work. */
   labourRate?: number;
+  /**
+   * Steps paid together as one job share this label. The rate sits on the LAST member and the
+   * earlier ones hold zero, so the agreed price is stored once — see the schema comment.
+   */
+  pieceGroup?: string | null;
   note?: string | null;
   vendor?: { id: number; name: string } | null;
 }
@@ -67,6 +90,12 @@ export interface StageCell {
   jobworkRate: number;
   /** ₹ per piece an in-house worker earns for clearing this stage. 0 = day-wage work. */
   labourRate: number;
+  /**
+   * Steps engaged at one agreed price share this label. Carried onto the cell because the
+   * CLIENT decides from it whether a multi-stage clearance may name workers — its mirror of
+   * the rule reads the board, not the stored rows.
+   */
+  pieceGroup?: string | null;
   note?: string | null;
   /** Pieces sitting at this stage right now. */
   at: number;
@@ -136,6 +165,7 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
       vendor: s.vendor ?? null,
       jobworkRate: s.jobworkRate ?? 0,
       labourRate: s.labourRate ?? 0,
+      pieceGroup: s.pieceGroup ?? null,
       note: s.note ?? null,
       at: 0,
       cleared: 0,
@@ -223,6 +253,11 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
      * almost always somebody forgetting — hence `unattributed` below.
      */
     c.labourValue = r2(!c.vendorId ? c.attributedPieces * (c.labourRate || 0) : 0);
+    /**
+     * Only a stage that CARRIES a rate can have work nobody was paid for. That is exactly the
+     * right test for a piece group too: its earlier members hold zero by construction, so they
+     * are never flagged, and the run reports once — on the step the agreed price sits on.
+     */
     c.unattributed = !c.vendorId && (c.labourRate || 0) > 0 ? Math.max(c.clearedBillable - c.attributedPieces, 0) : 0;
   }
 

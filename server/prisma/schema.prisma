@@ -690,6 +690,24 @@ model OrderLineStage {
   /// the product's LABOUR lines mapped to this step, then editable per order.
   /// Zero is allowed (day-wage work), but naming workers on a move then requires one.
   labourRate  Float   @default(0)
+  /**
+   * Steps paid together as ONE job.
+   *
+   * A labourer is often engaged for a run of steps at a single agreed price — "joining,
+   * sanding and polishing, ₹500 a piece" — rather than a rate per step. Stages of one order
+   * line sharing this label are that job. It must be a CONTIGUOUS run, because the pieces pass
+   * through them in order and a gap would mean somebody else did the middle.
+   *
+   * The rate lives on the LAST stage of the group and every earlier member holds zero, so the
+   * agreed price is stored exactly once and cannot drift between the steps it covers. Earning
+   * therefore happens where it always did — on the clearance that leaves the stage carrying the
+   * rate — and needs no special case in the money engines.
+   *
+   * What the group buys is ATTRIBUTION: a clearance spanning the whole run may name workers,
+   * which an ordinary multi-stage clearance may not, because with one price for the run there
+   * is nothing to split between the steps.
+   */
+  pieceGroup  String?
   note        String?
 
   orderLine OrderLine   @relation(fields: [orderLineId], references: [id], onDelete: Cascade)
@@ -710,6 +728,7 @@ model OrderLineStage {
 ///   REJECT   : fromStage -> toStage / PENDING (backward — rework)
 ///   COMPLETE : fromStage -> DONE
 ///   RETURN   : DONE      -> toStage           (undo a completion)
+/// Marker on `OrderLineStage` — see `pieceGroup` there.
 model StageMove {
   id          Int      @id @default(autoincrement())
   orderLineId Int
