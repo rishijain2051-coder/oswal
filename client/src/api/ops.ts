@@ -113,6 +113,16 @@ export interface StageCell {
   at: number;
   /** Pieces that moved forward out of here. */
   cleared: number;
+  /** Of those, the ones that earn — lower when rework was recorded at their own cost. */
+  clearedBillable?: number;
+  /** Of the billable ones, the pieces somebody was actually named for. */
+  attributedPieces?: number;
+  /**
+   * Billable pieces cleared at a piece-rate stage with NOBODY named. Nothing is owed for them —
+   * they read as day-wage work — so a non-zero figure usually means somebody forgot to say who
+   * did it, or moved the pieces across several stages at once, which cannot be attributed.
+   */
+  unattributed?: number;
   rejectedOut: number;
   rejectedIn: number;
   reached: number;

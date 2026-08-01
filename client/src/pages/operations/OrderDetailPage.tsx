@@ -183,6 +183,14 @@ export default function OrderDetailPage() {
    * reported as unrated to a floor login, which is a false alarm about money it cannot see
    * and could not have fixed.
    */
+  /**
+   * In-house piece work that nobody was named for. Shown to whoever can attribute it or set
+   * rates — it is a wages prompt, so it is pointless to anyone who can do neither.
+   */
+  const unattributedStages = !(can('board.workers') || can('board.rates'))
+    ? []
+    : o.lines.flatMap((l) => l.board.stages.filter((st) => (st.unattributed ?? 0) > 0).map((st) => ({ line: l, stage: st })));
+
   const unratedStages = !can('board.rates')
     ? []
     : o.lines.flatMap((l) => l.board.stages.filter((st) => st.vendorId && (st.jobworkRate ?? 0) <= 0).map((st) => ({ line: l, stage: st })));
@@ -242,6 +250,33 @@ export default function OrderDetailPage() {
                 Set rate
               </Button>
             )
+          }
+        />
+      )}
+
+      {/* The mirror of the alert above, for in-house work: a stage with a piece rate whose
+          pieces were cleared without anybody being named. Nothing is owed for them — they read
+          as day-wage work — so this is a prompt, not an error. It is by far the most common
+          way piece wages go missing, because a multi-stage clearance cannot be attributed. */}
+      {unattributedStages.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${unattributedStages.reduce((a, u) => a + (u.stage.unattributed ?? 0), 0)} pcs of piece-rate work with nobody named`}
+          description={
+            <span>
+              {unattributedStages.map((u, i) => (
+                <span key={`${u.line.id}-${u.stage.id}`}>
+                  {i > 0 && ' · '}
+                  <b>{u.stage.unattributed}</b> pc on “{u.stage.name}” of {u.line.product.factoryCode} at ₹{u.stage.labourRate}/pc
+                </span>
+              ))}
+              . Nobody earns for these — they count as day-wage work. If somebody should be paid
+              piece rate for them, undo the movement and record it again naming who did it. Pieces
+              moved across several stages in one action can never be attributed, because each
+              stage is a different job.
+            </span>
           }
         />
       )}

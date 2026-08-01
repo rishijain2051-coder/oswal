@@ -1349,6 +1349,73 @@ console.log('\n--- permissions: the catalogue and the routes agree ---');
   }
 }
 
+console.log('\n--- in-house piece work nobody was named for ---');
+{
+  /**
+   * A stage may carry a piece rate and still be cleared without anybody being named — either
+   * because the supervisor forgot, or because the pieces were moved across several stages in
+   * one action, which cannot be attributed at all.
+   *
+   * The board used to price that as `cleared × labourRate`, so it announced wages that no
+   * worker account held a paisa of: 40 pieces at ₹60 read as ₹2,400 earned and paid out ₹0.
+   * It is now priced off the pieces actually attributed, and the shortfall is reported as
+   * `unattributed` so somebody can act on it.
+   */
+  const stages: StageRow[] = [
+    { id: 1, name: 'joining', sortOrder: 0, vendorId: null, jobworkRate: 0, labourRate: 60 },
+    { id: 2, name: 'sanding', sortOrder: 1, vendorId: null, jobworkRate: 0, labourRate: 30 },
+    { id: 3, name: 'polishing', sortOrder: 2, vendorId: null, jobworkRate: 0, labourRate: 45 },
+    { id: 4, name: 'qc', sortOrder: 3, vendorId: null, jobworkRate: 0, labourRate: 0 },
+  ];
+  const line = { id: 1, qty: 40, stages, product: { factoryCode: 'X', name: 'X' } };
+  const agree = (name: string, moves: MoveRow[], wantValue: number, wantUnattributed: number) => {
+    const b = buildBoard(40, stages, moves);
+    const boardSays = b.stages.reduce((a, s) => a + s.labourValue, 0);
+    const wages = labourEvents({ id: 1, number: 'ORD-1' }, { ...line, moves } as never).reduce((a, e) => a + e.amount, 0);
+    check(`${name}: the board and the wage ledger agree`, boardSays, wages);
+    check(`${name}: and the figure is right`, boardSays, wantValue);
+    check(`${name}: unattributed pieces reported`, b.stages.reduce((a, s) => a + s.unattributed, 0), wantUnattributed);
+  };
+
+  const release: MoveRow = { id: 1, kind: 'RELEASE', fromStageId: null, toStageId: 1, qty: 40 };
+
+  agree(
+    'named every time',
+    [release,
+      { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 40, workers: [{ workerId: 7, pieces: 40 }] },
+      { id: 3, kind: 'ADVANCE', fromStageId: 2, toStageId: 3, qty: 40, workers: [{ workerId: 7, pieces: 40 }] }],
+    40 * 60 + 40 * 30,
+    0
+  );
+
+  // Rates set on every stage, nobody named — day-wage work, so it costs nothing per piece.
+  agree('nobody named', [release,
+    { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 40 },
+    { id: 3, kind: 'ADVANCE', fromStageId: 2, toStageId: 3, qty: 40 }], 0, 80);
+
+  // Moved straight through: three stages cleared by one action, none attributable.
+  agree('moved across several stages at once', [release,
+    { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 40 },
+    { id: 3, kind: 'ADVANCE', fromStageId: 2, toStageId: 3, qty: 40 },
+    { id: 4, kind: 'ADVANCE', fromStageId: 3, toStageId: 4, qty: 40 }], 0, 120);
+
+  // Half attributed: the named half earns, the rest is reported.
+  agree('partly attributed', [release,
+    { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 25, workers: [{ workerId: 7, pieces: 25 }] },
+    { id: 3, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 15 }], 25 * 60, 15);
+
+  // A stage with NO piece rate is day-wage by definition, so it is never reported.
+  const noRate: StageRow[] = [{ id: 1, name: 'joining', sortOrder: 0, vendorId: null, jobworkRate: 0, labourRate: 0 }, ...stages.slice(1)];
+  const b = buildBoard(40, noRate, [release, { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 40 }]);
+  check('a stage with no piece rate is never flagged', b.stages[0].unattributed, 0);
+
+  // Nor is a vendor stage: the vendor is owed whoever held the tools.
+  const vendorStages: StageRow[] = [{ id: 1, name: 'coating', sortOrder: 0, vendorId: 9, jobworkRate: 45, labourRate: 0 }, ...stages.slice(1)];
+  const vb = buildBoard(40, vendorStages, [release, { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 40 }]);
+  check('a vendor stage is never flagged', vb.stages[0].unattributed, 0);
+  check('and is still owed without anybody being named', vb.stages[0].jobworkValue, 40 * 45);
+}
+
 console.log('\n--- rework nobody pays for ---');
 {
   /**
@@ -1401,10 +1468,21 @@ console.log('\n--- rework nobody pays for ---');
   check('the roll-up counts billed pieces too', strip.jobwork[0]?.pieces, 40);
   check('and its amount matches', strip.jobwork[0]?.amount, 40 * 45);
 
-  // The same discipline for in-house piece work, which is priced identically.
+  /**
+   * The same discipline for in-house piece work — but it has to NAME somebody, because that is
+   * what in-house work is priced off now. A worker redoing their own spoiled pieces is named on
+   * the movement exactly as they were the first time; only `billable: false` stops them earning
+   * for it a second time.
+   */
   const inHouse: StageRow[] = [{ id: 1, name: 'polishing', sortOrder: 0, vendorId: null, jobworkRate: 0, labourRate: 30 }, ...stages.slice(1)];
-  const wageStrip = buildBoard(40, inHouse, atTheirCost);
-  check('an unpaid worker redo is not priced either', wageStrip.stages[0].labourValue, 40 * 30);
+  const crewed = atTheirCost.map((m) =>
+    m.kind === 'ADVANCE' && m.fromStageId === 1 ? { ...m, workers: [{ workerId: 7, pieces: m.qty }] } : m
+  );
+  const wageStrip = buildBoard(40, inHouse, crewed);
+  check('a worker redoing their own spoilage is not paid twice', wageStrip.stages[0].labourValue, 40 * 30);
+  check('and the wage ledger says the same', labourEvents({ id: 1, number: 'ORD-1' }, { ...line, stages: inHouse, moves: crewed } as never).reduce((a, e) => a + e.amount, 0), 40 * 30);
+  // Named and unpaid is not the same as unnamed: there is nothing left over to chase.
+  check('nothing is reported as unattributed', wageStrip.stages[0].unattributed, 0);
 }
 
 console.log('\n--- what has been billed, under either basis ---');

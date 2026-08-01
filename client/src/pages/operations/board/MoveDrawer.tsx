@@ -62,6 +62,20 @@ export default function MoveDrawer({ order, target, onClose }: { order: Order; t
     if (!attribution.allowed && crew.length) setCrew([]);
   }, [attribution.allowed]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * The piece-rate stages this move would cross without being able to say who did the work.
+   *
+   * Only meaningful when attribution is refused, which is exactly the multi-stage case: every
+   * stage from the source up to (not including) the destination is cleared by this submission,
+   * and any of them with a rate will earn nobody anything.
+   */
+  const unattributableStages = useMemo(() => {
+    if (!board || attribution.allowed || !from || from.kind !== 'STAGE' || !to) return [];
+    const upto = to.kind === 'STAGE' ? to.stage.sortOrder : board.stages.length;
+    if (upto <= from.stage.sortOrder) return [];
+    return board.stages.filter((s) => s.sortOrder >= from.stage.sortOrder && s.sortOrder < upto && !s.vendorId && (s.labourRate ?? 0) > 0);
+  }, [board, attribution.allowed, from, to]);
+
   /** Only a clearance earns, and only somebody who sets rates may decide it earns nothing. */
   const { can } = useAuth();
   const canSetRates = can('board.rates');
@@ -303,9 +317,36 @@ export default function MoveDrawer({ order, target, onClose }: { order: Order; t
               )}
             </>
           ) : (
-            <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-              {attribution.reason ?? 'Pick where the pieces are going first.'}
-            </Text>
+            <>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                {attribution.reason ?? 'Pick where the pieces are going first.'}
+              </Text>
+              {/* Said BEFORE the movement, not discovered afterwards. Crossing several stages
+                  at once cannot be attributed — each stage is a different job — so any of them
+                  carrying a piece rate will end up with work nobody is paid for. That is a
+                  legitimate choice when the stages are day-wage, and a mistake when they are
+                  not, which is exactly why it names the stages and their rates. */}
+              {unattributableStages.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 8 }}
+                  message="This will leave piece work with nobody named"
+                  description={
+                    <span>
+                      {unattributableStages.map((s, i) => (
+                        <span key={s.id}>
+                          {i > 0 && ' · '}
+                          <b>{s.name}</b> at ₹{s.labourRate}/pc
+                        </span>
+                      ))}
+                      {' '}— crossing several stages in one go cannot say who did which, so nobody
+                      earns for {qty} pc there. Clear one stage at a time to pay piece rate.
+                    </span>
+                  }
+                />
+              )}
+            </>
           )}
         </div>
 

@@ -49,6 +49,13 @@ export interface MoveRow {
    * putting right at their own cost.
    */
   billable?: boolean;
+  /**
+   * Who did it, with a piece count each. Needed for `labourValue` to mean anything: in-house
+   * piece work is owed to the people NAMED on the movement, so the query behind any board that
+   * displays it must include the workers relation (see `orderInclude`). Left out, the stage
+   * reports no piece work — which is correct for a board that was never asked about wages.
+   */
+  workers?: { workerId: number; pieces: number }[];
 }
 
 export interface StageCell {
@@ -72,6 +79,24 @@ export interface StageCell {
    * much of it anybody is paid for.
    */
   clearedBillable: number;
+  /**
+   * Of the billable ones, the pieces somebody was actually NAMED for.
+   *
+   * In-house piece work is owed to the people on the movement, so this — not `cleared` — is
+   * what it costs. Clearing a piece-rate stage without naming anybody is not free labour that
+   * vanished: it is day-wage work, which is paid through attendance rather than per piece.
+   */
+  attributedPieces: number;
+  /**
+   * Billable pieces cleared at a stage that HAS a piece rate with nobody named against them.
+   *
+   * Always 0 for a vendor stage and for an in-house stage with no rate. Non-zero means somebody
+   * either forgot to say who did the work, or moved the pieces across several stages at once —
+   * which cannot be attributed, because each stage is a different piece of work. It is the one
+   * number a supervisor can act on, so the order page raises it the way it raises an
+   * outsourced stage with no rate.
+   */
+  unattributed: number;
   /** Pieces sent backwards out of this stage (rejected for rework). */
   rejectedOut: number;
   /** Pieces that came back INTO this stage after a rejection downstream. */
@@ -115,6 +140,8 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
       at: 0,
       cleared: 0,
       clearedBillable: 0,
+      attributedPieces: 0,
+      unattributed: 0,
       rejectedOut: 0,
       rejectedIn: 0,
       reached: 0,
@@ -145,7 +172,10 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
         if (from) {
           from.cleared += q;
           // Absent means yes: every movement written before the flag existed was paid work.
-          if (m.billable !== false) from.clearedBillable += q;
+          if (m.billable !== false) {
+            from.clearedBillable += q;
+            from.attributedPieces += (m.workers ?? []).reduce((a, w) => a + w.pieces, 0);
+          }
         }
         break;
       case 'REJECT':
@@ -156,7 +186,10 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
       case 'COMPLETE':
         if (from) {
           from.cleared += q;
-          if (m.billable !== false) from.clearedBillable += q;
+          if (m.billable !== false) {
+            from.clearedBillable += q;
+            from.attributedPieces += (m.workers ?? []).reduce((a, w) => a + w.pieces, 0);
+          }
         }
         done += q;
         break;
@@ -172,9 +205,25 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
     // ledger have to agree to the rupee, and `jobworkEvents` skips unpaid rework — so pricing
     // the strip off the raw count would show a vendor owed for pieces they are re-doing free.
     c.jobworkValue = r2(c.vendorId ? c.clearedBillable * (c.jobworkRate || 0) : 0);
-    // In-house piece work is priced exactly as vendor jobwork is, off the same figure, so the
-    // two can never disagree about what is owed.
-    c.labourValue = r2(!c.vendorId ? c.clearedBillable * (c.labourRate || 0) : 0);
+    /**
+     * In-house piece work is priced off the pieces somebody was NAMED for — not off what the
+     * stage cleared. The asymmetry with jobwork above is the point, not an oversight:
+     *
+     *   A VENDOR stage has an implied party. Clearing it owes that vendor, whoever held the
+     *   spray gun, so `clearedBillable` is the right multiplier.
+     *
+     *   An IN-HOUSE stage has none. The money is owed to the people on the movement, and
+     *   `labourEvents` pays nobody when nobody is named — so pricing this off `clearedBillable`
+     *   made the board announce wages that no worker account had a paisa of. Clearing 40 pieces
+     *   at ₹60 with nobody named read as ₹2,400 earned and paid out ₹0.
+     *
+     * Nothing is lost by that: an in-house clearance with nobody named is DAY-WAGE work, and a
+     * day-wage worker is paid through attendance rather than per piece. What is worth saying
+     * out loud is when a stage that HAS a piece rate cleared pieces anonymously, which is
+     * almost always somebody forgetting — hence `unattributed` below.
+     */
+    c.labourValue = r2(!c.vendorId ? c.attributedPieces * (c.labourRate || 0) : 0);
+    c.unattributed = !c.vendorId && (c.labourRate || 0) > 0 ? Math.max(c.clearedBillable - c.attributedPieces, 0) : 0;
   }
 
   const jobworkMap = new Map<number, { vendorId: number; vendorName: string; stages: string[]; pieces: number; amount: number }>();
