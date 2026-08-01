@@ -43,6 +43,12 @@ export interface MoveRow {
   qty: number;
   date?: Date | string;
   note?: string | null;
+  /**
+   * Does this clearance earn anything? Absent means yes — every movement recorded before the
+   * flag existed was ordinary work. False is rework the vendor or the worker spoiled and is
+   * putting right at their own cost.
+   */
+  billable?: boolean;
 }
 
 export interface StageCell {
@@ -59,6 +65,13 @@ export interface StageCell {
   at: number;
   /** Pieces that have moved forward out of this stage (advanced or completed). */
   cleared: number;
+  /**
+   * Of those, the ones that EARN. Lower than `cleared` when rework was recorded at the
+   * vendor's or the worker's own cost. The two are kept apart because they answer different
+   * questions: `cleared` is how much work went through this stage, `clearedBillable` is how
+   * much of it anybody is paid for.
+   */
+  clearedBillable: number;
   /** Pieces sent backwards out of this stage (rejected for rework). */
   rejectedOut: number;
   /** Pieces that came back INTO this stage after a rejection downstream. */
@@ -101,6 +114,7 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
       note: s.note ?? null,
       at: 0,
       cleared: 0,
+      clearedBillable: 0,
       rejectedOut: 0,
       rejectedIn: 0,
       reached: 0,
@@ -128,7 +142,11 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
         pending -= q;
         break;
       case 'ADVANCE':
-        if (from) from.cleared += q;
+        if (from) {
+          from.cleared += q;
+          // Absent means yes: every movement written before the flag existed was paid work.
+          if (m.billable !== false) from.clearedBillable += q;
+        }
         break;
       case 'REJECT':
         if (from) from.rejectedOut += q;
@@ -136,7 +154,10 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
         else pending += q; // rejected all the way back to unstarted
         break;
       case 'COMPLETE':
-        if (from) from.cleared += q;
+        if (from) {
+          from.cleared += q;
+          if (m.billable !== false) from.clearedBillable += q;
+        }
         done += q;
         break;
       case 'RETURN':
@@ -147,10 +168,13 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
 
   const cellList = ordered.map((s) => cells.get(s.id)!);
   for (const c of cellList) {
-    c.jobworkValue = r2(c.vendorId ? c.cleared * (c.jobworkRate || 0) : 0);
-    // In-house piece work is priced exactly as vendor jobwork is, off the same
-    // `cleared` figure, so the two can never disagree about what work was done.
-    c.labourValue = r2(!c.vendorId ? c.cleared * (c.labourRate || 0) : 0);
+    // Priced off `clearedBillable`, NOT `cleared`. The strip on the board and the payables
+    // ledger have to agree to the rupee, and `jobworkEvents` skips unpaid rework — so pricing
+    // the strip off the raw count would show a vendor owed for pieces they are re-doing free.
+    c.jobworkValue = r2(c.vendorId ? c.clearedBillable * (c.jobworkRate || 0) : 0);
+    // In-house piece work is priced exactly as vendor jobwork is, off the same figure, so the
+    // two can never disagree about what is owed.
+    c.labourValue = r2(!c.vendorId ? c.clearedBillable * (c.labourRate || 0) : 0);
   }
 
   const jobworkMap = new Map<number, { vendorId: number; vendorName: string; stages: string[]; pieces: number; amount: number }>();
@@ -160,7 +184,9 @@ export function buildBoard(qty: number, stages: StageRow[], moves: MoveRow[]): L
       jobworkMap.get(c.vendorId) ??
       jobworkMap.set(c.vendorId, { vendorId: c.vendorId, vendorName: c.vendor?.name ?? `Vendor #${c.vendorId}`, stages: [], pieces: 0, amount: 0 }).get(c.vendorId)!;
     row.stages.push(c.name);
-    row.pieces += c.cleared;
+    // The pieces BILLED, to match the amount beside them. Showing the raw cleared count next
+    // to a total that excludes unpaid rework would read as a wrong rate.
+    row.pieces += c.clearedBillable;
     row.amount = r2(row.amount + c.jobworkValue);
   }
 
@@ -220,6 +246,17 @@ export function clearances<S extends StageRow, M extends MoveRow>(stages: S[], m
     const pending = awaitingRedo.get(stage.id) ?? 0;
     const rework = pending > 0;
     if (rework) awaitingRedo.set(stage.id, Math.max(pending - m.qty, 0));
+
+    /**
+     * A clearance marked not-billable is dropped HERE, which is the one walk both
+     * `jobworkEvents` and `labourEvents` are built on — so a vendor putting their own spoiled
+     * work right is skipped by both, and neither builder has to remember to ask.
+     *
+     * It is dropped after the redo bookkeeping above, not before: the pieces genuinely came
+     * back and genuinely went out again, so the BOARD must still see the movement. Only the
+     * money is withheld. `buildBoard` reads the ledger directly and is untouched by this.
+     */
+    if (m.billable === false) continue;
 
     out.push({ move: m, stage, rework });
   }

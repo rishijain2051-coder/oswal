@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, DatePicker, Divider, Drawer, Input, InputNumber, Select, Space, Tag, Typography, Upload } from 'antd';
+import { Alert, App, Button, Checkbox, DatePicker, Divider, Drawer, Input, InputNumber, Select, Space, Tag, Typography, Upload } from 'antd';
 import { PictureOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd/es/upload/interface';
+import { useAuth } from '../../../auth/AuthContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { api, apiError } from '../../../api/client';
@@ -29,6 +30,8 @@ export default function MoveDrawer({ order, target, onClose }: { order: Order; t
   const [toKey, setToKey] = useState<string>();
   const [qty, setQty] = useState(1);
   const [comment, setComment] = useState('');
+  /** Rework the vendor or worker spoiled themselves — recorded, but it earns nothing. */
+  const [unpaidRework, setUnpaidRework] = useState(false);
   const [date, setDate] = useState<dayjs.Dayjs>(dayjs());
   const [files, setFiles] = useState<UploadFile[]>([]);
   /** Who did the work. Optional — leave it empty and nothing is attributed. */
@@ -59,6 +62,11 @@ export default function MoveDrawer({ order, target, onClose }: { order: Order; t
     if (!attribution.allowed && crew.length) setCrew([]);
   }, [attribution.allowed]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Only a clearance earns, and only somebody who sets rates may decide it earns nothing. */
+  const { can } = useAuth();
+  const canSetRates = can('board.rates');
+  const isClearance = !!from && from.kind === 'STAGE' && (!to || to.kind !== 'STAGE' || to.stage.sortOrder > from.stage.sortOrder);
+
   const invalidate = () => {
     for (const key of OPS_KEYS) qc.invalidateQueries({ queryKey: key });
   };
@@ -74,6 +82,9 @@ export default function MoveDrawer({ order, target, onClose }: { order: Order; t
             toStageId: to!.kind === 'STAGE' ? to!.stage.id : null,
             qty,
             workers: namedCrew.length ? namedCrew : undefined,
+            // Omitted unless ticked: the server treats absence as ordinary, paid work, and
+            // sending it always would need the rates permission for every movement.
+            billable: unpaidRework ? false : undefined,
           },
         ],
         date: date.toISOString(),
@@ -222,6 +233,19 @@ export default function MoveDrawer({ order, target, onClose }: { order: Order; t
             onChange={(e) => setComment(e.target.value)}
           />
         </div>
+
+        {canSetRates && isClearance && (
+          <div>
+            <Checkbox checked={unpaidRework} onChange={(e) => setUnpaidRework(e.target.checked)}>
+              This is rework at their own cost — do not pay for it
+            </Checkbox>
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginLeft: 24 }}>
+              The movement is recorded either way, so the board still shows the pieces going
+              through. Only the earning is withheld — for when the vendor or the worker is
+              putting right something they spoiled.
+            </Text>
+          </div>
+        )}
 
         <div>
           <Text strong>Who did the work</Text>

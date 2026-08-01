@@ -1095,6 +1095,11 @@ const moveSchema = z.object({
    * attributable and still reconciles with the stage's cleared figure.
    */
   workers: z.array(z.object({ workerId: z.number().int(), pieces: z.number().int().positive() })).optional(),
+  /**
+   * False when this clearance is rework the vendor or the worker spoiled and is putting right
+   * at their own cost, so it earns nothing. Defaults to true: ordinary work is paid for.
+   */
+  billable: z.boolean().optional(),
 });
 
 const movesBodySchema = z.object({
@@ -1135,6 +1140,11 @@ router.post(
     if (body.moves.some((m) => m.workers?.length) && !may(req, 'board.workers')) {
       throw new ApiError(403, 'You do not have permission to do this. Naming the workers who did the work needs "Name who did the work".');
     }
+    // Deciding that a clearance earns nothing is deciding what somebody is paid, so it takes
+    // the same permission as setting the rate — not the one that merely records the movement.
+    if (body.moves.some((m) => m.billable === false) && !may(req, 'board.rates')) {
+      throw new ApiError(403, 'You do not have permission to do this. Recording rework as unpaid needs "Set jobwork and labour rates".');
+    }
 
     // The board is read, validated and written inside ONE transaction, and the order is
     // LOCKED before any of it. Doing the check outside left a window where two
@@ -1162,7 +1172,7 @@ router.post(
       const namedWorkers = namedIds.length ? await tx.worker.findMany({ where: { id: { in: namedIds } }, select: { id: true, name: true, isActive: true } }) : [];
 
       const simulated = new Map<number, MoveRow[]>();
-      const planned: { orderLineId: number; kind: string; fromStageId: number | null; toStageId: number | null; qty: number; note: string | null; workers?: { workerId: number; pieces: number }[] }[] = [];
+      const planned: { orderLineId: number; kind: string; fromStageId: number | null; toStageId: number | null; qty: number; note: string | null; billable: boolean; workers?: { workerId: number; pieces: number }[] }[] = [];
 
       for (const m of body.moves) {
         const line = lineById.get(m.orderLineId);
@@ -1200,7 +1210,9 @@ router.post(
           const board = buildBoard(line.qty, line.stages as any, [...(line.moves as any as MoveRow[]), ...extra]);
           const hopErr = validateMove(board, hop);
           if (hopErr) throw new ApiError(400, `${line.product.factoryCode} — ${hopErr}`);
-          planned.push({ orderLineId: m.orderLineId, kind: hop.kind, fromStageId: hop.fromStageId, toStageId: hop.toStageId, qty: hop.qty, note: m.note?.trim() || comment, workers });
+          // A multi-stage clearance expands into one hop per stage; if the submission is unpaid
+          // rework, every hop of it is, or the pieces would earn at the stages either side.
+          planned.push({ orderLineId: m.orderLineId, kind: hop.kind, fromStageId: hop.fromStageId, toStageId: hop.toStageId, qty: hop.qty, note: m.note?.trim() || comment, billable: m.billable !== false, workers });
           extra.push({ id: -1, kind: hop.kind, fromStageId: hop.fromStageId, toStageId: hop.toStageId, qty: hop.qty });
         }
         simulated.set(m.orderLineId, extra);
@@ -1217,6 +1229,7 @@ router.post(
             qty: p.qty,
             date,
             note: p.note,
+            billable: p.billable,
             createdById: req.user!.sub,
             ...(p.workers ? { workers: { create: p.workers.map((w) => ({ workerId: w.workerId, pieces: w.pieces })) } } : {}),
           },

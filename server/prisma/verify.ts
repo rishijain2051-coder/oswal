@@ -1349,6 +1349,64 @@ console.log('\n--- permissions: the catalogue and the routes agree ---');
   }
 }
 
+console.log('\n--- rework nobody pays for ---');
+{
+  /**
+   * A vendor whose coating blistered used to be paid twice for the same pieces: the board
+   * counts movements, and putting it right is a genuine second movement. `billable: false`
+   * records the clearance without the earning — the pieces still move, only the money stops.
+   */
+  const stages: StageRow[] = [
+    { id: 1, name: 'coating', sortOrder: 0, vendorId: 9, jobworkRate: 45, labourRate: 0 },
+    { id: 2, name: 'qc', sortOrder: 1, vendorId: null, jobworkRate: 0, labourRate: 0 },
+  ];
+  const paidTwice: MoveRow[] = [
+    { id: 1, kind: 'RELEASE', fromStageId: null, toStageId: 1, qty: 40, date: '2026-01-01' },
+    { id: 2, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 40, date: '2026-01-02' },
+    { id: 3, kind: 'REJECT', fromStageId: 2, toStageId: 1, qty: 6, date: '2026-01-03' },
+    { id: 4, kind: 'ADVANCE', fromStageId: 1, toStageId: 2, qty: 6, date: '2026-01-04' },
+  ];
+  // jobworkEvents labels each earning with the product it was for.
+  const line = { id: 1, qty: 40, stages, moves: paidTwice, product: { factoryCode: 'AB-2101', name: 'Aurora' } };
+  const before = jobworkEvents({ id: 1, number: 'ORD-1' }, line as never);
+  check('rework earns again when the factory caused it', before.reduce((a, e) => a + e.amount, 0), 40 * 45 + 6 * 45);
+
+  // The same movements, with the re-clearance recorded as the vendor's own cost.
+  const atTheirCost = paidTwice.map((m) => (m.id === 4 ? { ...m, billable: false } : m));
+  const after = jobworkEvents({ id: 1, number: 'ORD-1' }, { ...line, moves: atTheirCost } as never);
+  check('and earns nothing when the vendor did', after.reduce((a, e) => a + e.amount, 0), 40 * 45);
+
+  // The board must not notice. The pieces genuinely went through.
+  const boardPaid = buildBoard(40, stages, paidTwice);
+  const boardFree = buildBoard(40, stages, atTheirCost);
+  check('the board is identical either way', [boardFree.stages[0].at, boardFree.stages[1].at, boardFree.done], [boardPaid.stages[0].at, boardPaid.stages[1].at, boardPaid.done]);
+  check('and the stage still counts the pieces as cleared', boardFree.stages[0].cleared, boardPaid.stages[0].cleared);
+
+  // An unmarked movement is ordinary work — every row written before the flag existed.
+  const legacy = jobworkEvents({ id: 1, number: 'ORD-1' }, { ...line, moves: paidTwice.map(({ ...m }) => m) } as never);
+  check('a movement with no flag still earns', legacy.reduce((a, e) => a + e.amount, 0), 40 * 45 + 6 * 45);
+
+  /**
+   * THE INVARIANT. The strip drawn on the board and the ledger behind the payables page are
+   * two different walks over the same movements, and they have to agree to the rupee — the
+   * failure this whole file exists to prevent. Pricing the strip off `cleared` while
+   * `jobworkEvents` skipped unpaid rework would have shown the vendor owed for pieces they
+   * were re-doing free, which is how the two came apart the first time.
+   */
+  const strip = buildBoard(40, stages, atTheirCost);
+  const ledger = after.reduce((a, e) => a + e.amount, 0);
+  check('the board strip and the payables ledger agree', strip.stages[0].jobworkValue, ledger);
+  check('and the pieces beside the amount are the billed ones', strip.stages[0].clearedBillable, 40);
+  check('while the stage still reports all the work that went through it', strip.stages[0].cleared, 46);
+  check('the roll-up counts billed pieces too', strip.jobwork[0]?.pieces, 40);
+  check('and its amount matches', strip.jobwork[0]?.amount, 40 * 45);
+
+  // The same discipline for in-house piece work, which is priced identically.
+  const inHouse: StageRow[] = [{ id: 1, name: 'polishing', sortOrder: 0, vendorId: null, jobworkRate: 0, labourRate: 30 }, ...stages.slice(1)];
+  const wageStrip = buildBoard(40, inHouse, atTheirCost);
+  check('an unpaid worker redo is not priced either', wageStrip.stages[0].labourValue, 40 * 30);
+}
+
 console.log('\n--- what has been billed, under either basis ---');
 {
   /**

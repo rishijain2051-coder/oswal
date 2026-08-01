@@ -373,7 +373,29 @@ export default function ProformaEditPage() {
               style={{ width: '100%' }}
               value={f.buyerId}
               options={(buyers ?? []).map((b) => ({ label: `${b.code} · ${b.name}${b.email ? '' : '  (no e-mail)'}`, value: b.id }))}
-              onChange={(v) => set({ buyerId: v })}
+              onChange={(v) => {
+                /**
+                 * Picking the buyer brings their currency and terms with them.
+                 *
+                 * The form used to open on whichever currency came back first and leave it
+                 * there, so a UK account could be quoted in euros by simply not noticing —
+                 * and the order that followed would snapshot the wrong exchange rate too.
+                 *
+                 * Only fields the buyer actually has set are applied, and only on a NEW
+                 * proforma: reassigning the buyer on an existing one must not silently
+                 * re-price a document somebody has already been sent.
+                 */
+                const b = (buyers ?? []).find((x) => x.id === v);
+                const defaults: Record<string, unknown> = { buyerId: v };
+                if (!id && b) {
+                  if (b.currencyId) defaults.currencyId = b.currencyId;
+                  if (b.paymentTerms) defaults.paymentTerms = b.paymentTerms;
+                  if (b.deliveryTerms) defaults.deliveryTerms = b.deliveryTerms;
+                  // Incoterms are an export concept; a domestic quotation hides the field.
+                  if (b.incoterms && b.market !== 'DOMESTIC') defaults.incoterms = b.incoterms;
+                }
+                set(defaults);
+              }}
             />
             {buyer && (
               <div style={{ marginTop: 4 }}>

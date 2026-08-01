@@ -1050,6 +1050,54 @@ router.post(
         });
       }
 
+      /**
+       * Carry each order's document-level charges onto the invoice — ONCE per order.
+       *
+       * Freight and insurance are agreed on the proforma and copied onto the order when it is
+       * accepted. Nothing then carried them any further, so an order worth £6,170 was invoiced
+       * at £5,720, the buyer paid what the invoice said, and the order was left showing £450
+       * outstanding for ever. Every order carrying freight quietly inflated the receivable.
+       *
+       * "Once" is the whole difficulty. An order shipped in two containers produces two
+       * invoices and the freight belongs on one of them, so a charge records the order it came
+       * from and a later invoice for that order skips what has already gone out. A charge
+       * typed on the invoice itself has no `orderId` and is never involved in this.
+       */
+      const chargedAlready = await tx.invoiceCharge.findMany({
+        where: {
+          orderId: { in: orderIds },
+          // A cancelled or trashed invoice never reached the buyer, so its charges have NOT
+          // been billed and must come across on the next one.
+          invoice: { deletedAt: null, status: { not: 'CANCELLED' } },
+        },
+        select: { orderId: true },
+      });
+      const billedOrders = new Set(chargedAlready.map((c) => c.orderId));
+
+      let chargeSort = 0;
+      for (const oid of orderIds) {
+        if (billedOrders.has(oid)) continue;
+        const charges = await tx.orderCharge.findMany({ where: { orderId: oid }, orderBy: { sortOrder: 'asc' } });
+        for (const c of charges) {
+          await tx.invoiceCharge.create({
+            data: {
+              invoiceId: invoice.id,
+              orderId: oid,
+              // COPIED, like the line prices above — the document is frozen against a later
+              // correction to the order it came from.
+              name: c.name,
+              kind: c.kind,
+              amount: c.amount,
+              pct: c.pct,
+              gstRatePct: c.gstRatePct,
+              isTaxable: c.isTaxable,
+              note: c.note,
+              sortOrder: chargeSort++,
+            },
+          });
+        }
+      }
+
       for (const oid of orderIds) await syncShipped(tx, oid);
       return tx.invoice.findUniqueOrThrow({ where: { id: invoice.id }, include: invoiceInclude });
     });

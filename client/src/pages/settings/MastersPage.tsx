@@ -38,7 +38,12 @@ const unitFields: FieldDef[] = [
  * decides the price basis (FOB vs Non-FOB), the document series and whether GST applies;
  * state decides CGST + SGST versus IGST against our own.
  */
-const buyerFields: FieldDef[] = [
+/**
+ * Built rather than declared, because the currency options are the live currency list.
+ * A buyer's currency and terms are DEFAULTS for a new proforma — the document snapshots its
+ * own, so editing them here never rewrites a quotation that has already gone out.
+ */
+const buyerFieldsFor = (currencies: { id: number; code: string; name: string }[]): FieldDef[] => [
   { name: 'code', label: 'Code', type: 'text', required: true, width: 90 },
   { name: 'name', label: 'Name', type: 'text', required: true },
   {
@@ -70,6 +75,16 @@ const buyerFields: FieldDef[] = [
   { name: 'email', label: 'Email', type: 'text', hideInTable: true },
   { name: 'phone', label: 'Phone', type: 'text', hideInTable: true },
   { name: 'address', label: 'Address', type: 'text', hideInTable: true },
+  {
+    name: 'currencyId',
+    label: 'Currency',
+    type: 'select',
+    width: 110,
+    options: currencies.map((c) => ({ label: c.code, value: c.id })),
+  },
+  { name: 'incoterms', label: 'Incoterms', type: 'text', width: 120, hideInTable: true },
+  { name: 'paymentTerms', label: 'Payment terms', type: 'text', hideInTable: true },
+  { name: 'deliveryTerms', label: 'Delivery terms', type: 'text', hideInTable: true },
   { name: 'isActive', label: 'Active', type: 'switch', defaultValue: true, width: 90 },
 ];
 
@@ -132,8 +147,10 @@ function AttributesTab() {
 
 export default function MastersPage() {
   const { can } = useAuth();
+  // Read before the early return: a hook cannot be called conditionally.
+  const { data: currencies } = useCurrencies();
   if (!can('masters.view')) {
-    return <Result status="403" title="Restricted" subTitle="Master data is editable by Managers and Admins only." />;
+    return <Result status="403" title="You do not have access to this" subTitle='Master data needs the "See master data" permission.' />;
   }
 
   return (
@@ -153,7 +170,7 @@ export default function MastersPage() {
             { key: 'company', label: 'Company', children: <CompanyTab /> },
             { key: 'currencies', label: 'Currencies', children: <CurrenciesTab /> },
             { key: 'units', label: 'Units', children: <MasterCrud endpoint="/units" queryKey={['units']} fields={unitFields} /> },
-            { key: 'buyers', label: 'Buyers', children: <MasterCrud endpoint="/buyers" queryKey={['buyers']} fields={buyerFields} /> },
+            { key: 'buyers', label: 'Buyers', children: <MasterCrud endpoint="/buyers" queryKey={['buyers']} fields={buyerFieldsFor(currencies ?? [])} /> },
             { key: 'attributes', label: 'Attributes', children: <AttributesTab /> },
             { key: 'stage-lines', label: 'Stage Lines', children: <StageLinesTab /> },
             { key: 'formulas', label: 'Cost Formulas', children: <FormulasTab /> },

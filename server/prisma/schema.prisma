@@ -96,6 +96,7 @@ model Currency {
   orders     Order[]
   proformas  Proforma[]
   invoices   Invoice[]
+  buyers     Buyer[]
 }
 
 model Unit {
@@ -154,9 +155,22 @@ model Buyer {
   /// The buyer's state, which decides CGST+SGST versus IGST against the company's own.
   state String?
 
+  /// What this buyer is normally quoted in, and on what terms.
+  ///
+  /// Defaults for a new proforma, nothing more — every document snapshots its own currency and
+  /// terms, so changing these never rewrites one that already exists. They are here because a
+  /// buyer IS their currency in practice: a UK account is quoted in sterling every time, and
+  /// the proforma form used to open on whichever currency happened to be first in the list.
+  /// Getting that wrong books the order at the wrong exchange rate as well as the wrong price.
+  currencyId    Int?
+  paymentTerms  String?
+  deliveryTerms String?
+  incoterms     String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  currency  Currency?      @relation(fields: [currencyId], references: [id])
   products  ProductBuyer[]
   orders    Order[]
   proformas Proforma[]
@@ -706,6 +720,18 @@ model StageMove {
   date        DateTime @default(now())
   /// Free-text hand-over comment written when the pieces were passed on.
   note        String?
+  /// Does this clearance EARN anything?
+  ///
+  /// True for ordinary work. False for rework the vendor or the worker caused themselves —
+  /// pieces they spoiled and are putting right at their own cost. Without it a vendor whose
+  /// coating blistered was paid twice for the same forty pieces, because the board counts
+  /// movements and rework is a genuine second movement.
+  ///
+  /// It is a property of the MOVEMENT rather than of the rejection that preceded it, because
+  /// that is where the decision is actually made: the pieces come back, somebody agrees who
+  /// carries the cost, and the re-clearance is recorded accordingly. A rejection on its own
+  /// settles nothing.
+  billable    Boolean  @default(true)
   createdById Int?
   createdAt   DateTime @default(now())
 
@@ -1747,6 +1773,17 @@ model InvoiceLine {
 model InvoiceCharge {
   id         Int     @id @default(autoincrement())
   invoiceId  Int
+  /// Which order this charge was COPIED FROM, when it came across with the goods.
+  ///
+  /// Freight and insurance are agreed once on the proforma and carried onto the order, so an
+  /// invoice raised for that order has to bill them or the buyer pays for the goods and the
+  /// order is left owing the freight for ever. They must also be billed ONCE: an order shipped
+  /// in two containers gets two invoices, and only the first carries the charge. That is what
+  /// this column is for — it is the record of "this order's charges have already gone out".
+  ///
+  /// NULL means the charge was added on the invoice itself, which is the ordinary case for
+  /// something that only became known at dispatch.
+  orderId    Int?
   name       String
   kind       String  @default("CHARGE") // CHARGE | DISCOUNT
   amount     Float   @default(0)

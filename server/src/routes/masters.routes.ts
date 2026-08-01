@@ -383,6 +383,9 @@ router.get(
     res.json(
       await prisma.buyer.findMany({
         where: q ? { OR: [{ name: like(q) }, { code: like(q) }] } : undefined,
+        // The currency comes with them: the proforma form defaults to it, and without the join
+        // it opened on whichever currency happened to be first in the list.
+        include: { currency: { select: { id: true, code: true, symbol: true } } },
         orderBy: { name: 'asc' },
       })
     );
@@ -408,6 +411,15 @@ const buyerSchema = z.object({
   gstNo: z.string().optional().nullable(),
   /** Compared with the company's state to pick CGST+SGST versus IGST. */
   state: z.string().optional().nullable(),
+  /**
+   * What this buyer is normally quoted in, and on what terms. DEFAULTS for a new proforma
+   * and nothing more — every document snapshots its own, so changing these never touches one
+   * that already exists.
+   */
+  currencyId: z.number().int().nullable().optional(),
+  paymentTerms: z.string().max(200).nullable().optional(),
+  deliveryTerms: z.string().max(200).nullable().optional(),
+  incoterms: z.string().max(60).nullable().optional(),
 });
 
 /**

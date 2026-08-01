@@ -96,6 +96,15 @@ export interface Buyer {
   gstNo?: string | null;
   /** Compared with the company's state to decide CGST+SGST versus IGST. */
   state?: string | null;
+  /**
+   * What this buyer is normally quoted in, and on what terms. Defaults for a NEW proforma —
+   * every document keeps its own snapshot, so editing these never changes one already written.
+   */
+  currencyId?: number | null;
+  currency?: { id: number; code: string; symbol: string } | null;
+  paymentTerms?: string | null;
+  deliveryTerms?: string | null;
+  incoterms?: string | null;
 }
 
 /** Who WE are. Singleton, edited in Master Data -> Company. */
