@@ -318,10 +318,38 @@ closed. Do not add a payroll-period model; it would be wrong on day one.
   priced, so rework earns again and the totals reconcile with the board's `cleared`
   figure. `clearances()` in `production.ts` is the ONE walk over the move ledger that
   both `jobworkEvents` and `labourEvents` are built on — do not fork it.
-- **Only a single-hop clearance can be attributed.** A move spanning several stages is
-  refused rather than guessed at, because each hop is a different stage's work. A vendor
-  stage refuses workers, and an in-house stage with workers named requires a rate (a zero
-  rate elsewhere is normal — that stage is day-wage work).
+- **Only a single-hop clearance can be attributed — unless the hops are one PIECE GROUP.** A
+  move spanning several stages is otherwise refused rather than guessed at, because each hop is
+  a different stage's work at a different price. A vendor stage refuses workers, and an
+  in-house stage with workers named requires a rate (a zero rate elsewhere is normal — that
+  stage is day-wage work).
+- **A piece group is a run of steps engaged at ONE agreed price** — "joining, sanding and
+  polishing, ₹500 a piece", which is how a lot of labour is actually taken on.
+  `OrderLineStage.pieceGroup` marks the run; the price sits on its **last** member and the
+  earlier ones hold zero, so the agreed figure is stored exactly once and cannot drift between
+  the steps it covers. That is what keeps the money engines free of special cases: earning
+  still happens on the clearance leaving the stage that carries the rate, so `labourEvents`
+  needed no change. Members must be **contiguous** (pieces pass through in order, and a gap
+  would mean somebody else did the middle step while the single price paid for it) and
+  in-house. What the group buys is **attribution across the run** — `spansOnePieceGroup()`,
+  mirrored in `moveLogic.ts`, which is why the label is carried onto the board CELL and not
+  just the stored row: the client decides from the board. The crew lands on **one hop**, the
+  one leaving the priced stage; on every hop the money would still be right and the worker's
+  piece count would be three times over.
+- **In-house piece work is priced off `attributedPieces`, not `cleared`.** The asymmetry with
+  jobwork is the point: a VENDOR stage has an implied party, so clearing it owes that vendor
+  whoever held the tools; an IN-HOUSE stage has none, and the money is owed to the people named
+  on the movement. Pricing it off the cleared count made the board announce wages no worker
+  account held a paisa of. A clearance with nobody named is **day-wage work**, paid through
+  attendance — so `unattributed` reports billable pieces cleared at a stage that HAS a rate
+  with nobody named, which is the one number a supervisor can act on. Zero for a vendor stage
+  and for a stage with no rate, because neither is ever wrong.
+- **`StageMove.billable`** records a clearance that earns nothing — rework the vendor or the
+  worker spoiled and is putting right at their own cost. The pieces still move; only the money
+  stops. It is a property of the MOVEMENT, not of the rejection before it, because that is
+  where the decision is actually made. `buildBoard` prices the strip off `clearedBillable` so
+  it agrees with `jobworkEvents` to the rupee — pricing off the raw count would have shown a
+  vendor owed for pieces they were re-doing free.
 - **Product LABOUR lines are REFERENCE only.** `CostLine.stageStepId` maps a labour line
   to a step of the product's stage line; `labourRatesForProduct()` seeds
   `OrderLineStage.labourRate` when an order snapshots its stages. Costing itself never
