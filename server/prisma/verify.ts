@@ -59,6 +59,7 @@ import { assemble, normalizeKey, outlier, summarize, windowStart, type Occurrenc
 import { chargeValue, docKeys, documentTotals, documentValue, lineNet, sameState } from '../src/lib/pricing';
 import { DELIVERY_URGENCY, autoSchedule, daysBetween, deliveryStatus, estimateCompletion } from '../src/lib/scheduling';
 import { survivesWipe } from './wipe';
+import { isAllowedOrigin } from '../src/env';
 import {
   PERMISSION_KEYS,
   PERMISSION_MODULES,
@@ -1347,6 +1348,46 @@ console.log('\n--- permissions: the catalogue and the routes agree ---');
     const guard = at < 0 ? '' : financeText.slice(at, at + 200);
     check(`${route} is behind a money permission`, at >= 0 && /can\('money\./.test(guard), true);
   }
+}
+
+console.log('\n--- which browsers may call the API ---');
+{
+  /**
+   * One factory, several devices: the office PC runs this and the floor reads the board on a
+   * tablet, so the development fallback covers the private network as well as the machine
+   * itself. The trap it fixes is worth restating — the client calls `/api` relative and Vite
+   * proxies it, which looks same-origin and therefore CORS-free, but a browser still sends an
+   * `Origin` header on a same-origin POST. A tablet was refused its login while everything
+   * worked perfectly on the machine itself.
+   *
+   * These assert the boundary in both directions. Widening it to a public address, or letting
+   * it apply in production, is the mistake this catches.
+   */
+  const list = ['http://localhost:688', 'http://127.0.0.1:688'];
+  for (const ok of [
+    'http://localhost:688',
+    'http://127.0.0.1:688',
+    'http://192.168.1.2:688',
+    'http://192.168.1.7:5173',
+    'http://10.0.0.4:688',
+    'http://172.16.5.9:688',
+    'http://172.31.255.254:688',
+  ]) {
+    check(`allowed in development: ${ok}`, isAllowedOrigin(ok, list), true);
+  }
+  for (const no of [
+    'http://evil.example.com',
+    'https://oswal-erp.example.com',
+    'http://8.8.8.8:688',
+    'http://172.15.0.1:688', // just below the private 172.16–31 block
+    'http://172.32.0.1:688', // just above it
+    'http://192.169.1.2:688', // one octet off 192.168
+    'not-a-url',
+  ]) {
+    check(`refused: ${no}`, isAllowedOrigin(no, list), false);
+  }
+  // An explicitly configured origin is honoured whatever it looks like — that is the override.
+  check('a configured origin is always allowed', isAllowedOrigin('https://erp.oswal.example', ['https://erp.oswal.example']), true);
 }
 
 console.log('\n--- steps paid together as one job ---');

@@ -33,10 +33,34 @@ function resolveJwtSecret(): string {
 }
 
 /**
- * Browser origins allowed to call the API. In development the Vite dev server
- * proxies `/api`, so requests are same-origin and this only matters if the app is
- * opened directly against :689.
+ * Browser origins allowed to call the API.
+ *
+ * `CORS_ORIGINS` overrides everything and is what production uses — unset there, NOTHING is
+ * allowed, which is the safe direction to fail in.
+ *
+ * The development fallback covers this machine AND the private network it is on, because one
+ * factory runs one server and the floor reads the board on a tablet. It is tempting to think
+ * the dev proxy makes this unnecessary — the client calls `/api` relative and Vite forwards it,
+ * so surely it is same-origin? It is, and the browser still sends an `Origin` header on a
+ * same-origin POST, so the allowlist is still consulted and a tablet at 192.168.1.7 was refused
+ * its login while everything worked perfectly on the machine itself.
+ *
+ * Only PRIVATE ranges are matched, and only in development. A public address never is, so this
+ * cannot quietly open the API to the internet if somebody runs a dev server on a cloud box.
  */
+const PRIVATE_HOST = /^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/;
+
+export function isAllowedOrigin(origin: string, allowlist: string[]): boolean {
+  if (allowlist.includes(origin)) return true;
+  if (isProd) return false;
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'http:' && PRIVATE_HOST.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveOrigins(): string[] {
   const configured = process.env.CORS_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean);
   if (configured?.length) return configured;

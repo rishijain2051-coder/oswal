@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
-import { env } from './env';
+import { env, isAllowedOrigin } from './env';
 import { ApiError, errorHandler } from './lib/http';
 import { authenticate, authenticateUpload } from './middleware/auth';
 import authRoutes from './routes/auth.routes';
@@ -35,7 +35,9 @@ app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true); // same-origin, curl, server-to-server
-      if (env.CORS_ORIGINS.includes(origin)) return cb(null, true);
+      // The allowlist, plus this machine's own private network in development — see
+      // `isAllowedOrigin`. Production is the allowlist and nothing else.
+      if (isAllowedOrigin(origin, env.CORS_ORIGINS)) return cb(null, true);
       cb(new ApiError(403, `Origin ${origin} is not allowed to call this API.`));
     },
     credentials: true,
