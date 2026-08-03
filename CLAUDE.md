@@ -88,6 +88,15 @@ SQLite until the move; the schema stayed portable and only the provider changed.
 - `pg_ctl start` output goes to a **file, never a pipe**: the postmaster inherits the
   handle and outlives `pg_ctl`, so with a pipe `spawnSync` waits forever on a healthy
   database. This cost a debugging session; the comment in `run()` says so.
+- That file lives in **`server/.pglog/`, OUTSIDE the data directory**. Inside it, `pg_ctl -l`
+  holds a handle on a file that crash recovery then tries to fsync, which on Windows is a
+  `sharing violation` — "Continuing to retry for 30 seconds", a half-minute fsync stall, and a
+  hint blaming your antivirus. A log is not data, so it is right out of `db:backup` anyway.
+- **`start()` waits for a CONNECTION, not for a pid.** A postmaster replaying WAL is running by
+  `pg_ctl status` and refuses every connection, so `npm run dev` announced "Postgres is already
+  running" and then failed on the next line when `ensureDatabase` tried to talk to it.
+  `waitUntilAcceptingConnections` polls until it answers, waits out only the errors that mean
+  "not yet", and says it is waiting once it is clear the wait is not instant.
 - Only `initdb`, `pg_ctl` and `postgres` ship — **no `psql`, no `createdb`, no `pg_dump`.**
   The database is created over a `pg` connection, and backups are a directory copy.
 

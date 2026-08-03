@@ -10,6 +10,9 @@ server/.env
 # database — the development Postgres cluster lives in the repo but is never committed:
 # it is machine-specific binary state, and `npm run pg:start` recreates it from nothing.
 server/.pgdata/
+# the server log — kept OUT of the data directory, or crash recovery collides with the handle
+# pg_ctl holds on it and stalls for half a minute. See the note in scripts/pg.ts.
+server/.pglog/
 # a restore moves the cluster it replaced aside rather than deleting it
 server/.pgdata.replaced-*/
 server/uploads.replaced-*/

@@ -38,7 +38,23 @@ import dotenv from 'dotenv';
 
 export const SERVER_DIR = path.resolve(__dirname, '..');
 export const PGDATA = path.join(SERVER_DIR, '.pgdata');
-const LOGFILE = path.join(PGDATA, 'postgres.log');
+/**
+ * The server log lives OUTSIDE the data directory, and that is not a tidiness preference.
+ *
+ * It used to be `.pgdata/postgres.log`, which meant `pg_ctl -l` held a handle open on a file
+ * inside the very directory Postgres fsyncs. After an unclean stop, crash recovery walks the
+ * data directory and hits it:
+ *
+ *     could not open file "./postgres.log": sharing violation
+ *     DETAIL: Continuing to retry for 30 seconds.
+ *     HINT: You might have antivirus, backup, or similar software interfering …
+ *
+ * — and then spends half a minute fsyncing before it will accept a connection. The hint sends
+ * you looking for antivirus; the culprit is the log path. Out here there is nothing to collide
+ * with, and a log is not data, so leaving it out of `db:backup` is right anyway.
+ */
+const LOGDIR = path.join(SERVER_DIR, '.pglog');
+const LOGFILE = path.join(LOGDIR, 'postgres.log');
 const IS_WINDOWS = process.platform === 'win32';
 
 dotenv.config({ path: path.join(SERVER_DIR, '.env') });
@@ -269,14 +285,64 @@ async function init(conn: Conn): Promise<void> {
   console.log('  Cluster created.');
 }
 
+/**
+ * Wait until the server will actually TALK to us, not merely until it has a pid.
+ *
+ * `pg_ctl status` reports a running postmaster, and a postmaster replaying WAL after an
+ * unclean stop is running while refusing every connection with "the database system is
+ * starting up". So `npm run dev` used to announce "Postgres is already running", then fail on
+ * the very next line when `ensureDatabase` tried to connect — a confusing pair of messages for
+ * what is really "give it a moment".
+ *
+ * Recovery on a cold cache can take the best part of a minute, so this waits rather than
+ * failing, and says what it is waiting for once it is clear the wait is not instant.
+ */
+async function waitUntilAcceptingConnections(conn: Conn, timeoutMs = 90_000): Promise<void> {
+  const { Client } = require('pg') as typeof import('pg');
+  const started = Date.now();
+  let announced = false;
+
+  for (;;) {
+    const client = new Client({ host: conn.host, port: conn.port, user: conn.user, password: conn.password, database: 'postgres', connectionTimeoutMillis: 3000 });
+    try {
+      await client.connect();
+      await client.end();
+      if (announced) console.log('  Ready.');
+      return;
+    } catch (err) {
+      await client.end().catch(() => undefined);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Anything that is not "not ready yet" is a real problem and should not be waited out.
+      const transient = /starting up|shutting down|ECONNREFUSED|ETIMEDOUT|Connection terminated/i.test(msg);
+      if (!transient) die(`Postgres is running but refused the connection:\n  ${msg}`);
+
+      if (Date.now() - started > timeoutMs) {
+        const log = tailLog();
+        die(
+          `Postgres did not become ready within ${Math.round(timeoutMs / 1000)}s (${msg}).` +
+            `${log ? `\n\n    From ${path.relative(process.cwd(), LOGFILE)}:\n${log}` : ''}` +
+            `\n\n  If it is stuck, stop and start it:  npm run pg:restart`
+        );
+      }
+      if (!announced) {
+        console.log('  Postgres is still coming up — recovering after an unclean stop. Waiting …');
+        announced = true;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
 export async function start(conn: Conn): Promise<void> {
   await init(conn);
+  fs.mkdirSync(LOGDIR, { recursive: true });
 
   if (isRunning()) {
     console.log(`  Postgres is already running on port ${conn.port}.`);
   } else {
-    // `-w` waits until the server is actually accepting connections, so anything that
-    // runs after this command can connect without polling.
+    // `-w` waits until the server is accepting connections — but only up to its own timeout,
+    // and it is satisfied by a postmaster that is still replaying WAL. The explicit wait
+    // below is what everything after this command actually depends on.
     const res = run(exe('pg_ctl'), ['start', '-D', PGDATA, '-l', LOGFILE, '-w', '-o', `-p ${conn.port}`]);
     if (res.code !== 0) {
       const log = tailLog();
@@ -284,6 +350,9 @@ export async function start(conn: Conn): Promise<void> {
     }
     console.log(`  Postgres is up on port ${conn.port}.`);
   }
+
+  // Either branch above can leave a server that has a pid and no answers yet.
+  await waitUntilAcceptingConnections(conn);
 }
 
 export function stop(): void {
